@@ -12,8 +12,8 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
   # Nástroje CI jsou připnuté přesně; aktualizace jen záměrně, jedna na změnu.
-  CARGO_DENY_VERSION: 0.18.3
-  CARGO_AUDIT_VERSION: 0.21.2
+  CARGO_DENY_VERSION: 0.20.2
+  CARGO_AUDIT_VERSION: 0.22.2
 
 jobs:
   check:
@@ -35,6 +35,14 @@ jobs:
 
       - name: Pravidla závislostí
         run: python3 scripts/check-deps.py
+
+  tla:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: TLA+ model synchronizace (server vynucuje etag)
+        run: scripts/tlc.sh SyncEtag.cfg
 
   supply-chain:
     runs-on: ubuntu-24.04

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Spustí model checker TLC nad TLA+ modelem v adresáři tla/.
+#
+# Použití: scripts/tlc.sh <Model.cfg> [další volby TLC]
+# Příklad: scripts/tlc.sh SyncEtag.cfg
+#
+# Java i tla2tools se stáhnou při prvním spuštění do .tools/ (není v gitu),
+# v připnutých verzích s kontrolou SHA-256. Systémová Java není potřeba.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TOOLS="$ROOT/.tools"
+
+TLA_VERSION="1.7.4"
+TLA_URL="https://github.com/tlaplus/tlaplus/releases/download/v${TLA_VERSION}/tla2tools.jar"
+# GitHub u tohoto vydání součet neuvádí; zapsán při prvním stažení 2026-11-14.
+TLA_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
+
+JRE_VERSION="21.0.13+9"
+JRE_URL="https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jre_x64_linux_hotspot_21.0.13_9.tar.gz"
+# Součet podle Adoptium API.
+JRE_SHA256="a535a1df9c6284d9618872984e026ae0352d1f7e9e0605425c0e6114f47351dd"
+
+fetch() { # url cíl sha256
+    local url="$1" dest="$2" sum="$3"
+    if [[ ! -f "$dest" ]]; then
+        curl --proto '=https' --tlsv1.2 -fsSL -o "$dest.part" "$url"
+        mv "$dest.part" "$dest"
+    fi
+    if ! echo "$sum  $dest" | sha256sum -c --quiet -; then
+        echo "chyba: nesedí kontrolní součet $dest" >&2
+        rm -f "$dest"
+        exit 1
+    fi
+}
+
+mkdir -p "$TOOLS"
+JAR="$TOOLS/tla2tools-$TLA_VERSION.jar"
+fetch "$TLA_URL" "$JAR" "$TLA_SHA256"
+
+JAVA="$TOOLS/jre-$JRE_VERSION/bin/java"
+if [[ ! -x "$JAVA" ]]; then
+    fetch "$JRE_URL" "$TOOLS/jre.tar.gz" "$JRE_SHA256"
+    mkdir -p "$TOOLS/jre-$JRE_VERSION"
+    tar -xzf "$TOOLS/jre.tar.gz" -C "$TOOLS/jre-$JRE_VERSION" --strip-components=1
+fi
+
+if [[ $# -lt 1 ]]; then
+    echo "použití: $0 <Model.cfg> [volby TLC]" >&2
+    exit 2
+fi
+CFG="$1"
+shift
+
+cd "$ROOT/tla"
+exec "$JAVA" -XX:+UseParallelGC -cp "$JAR" tlc2.TLC \
+    -config "$CFG" -workers auto -deadlock -cleanup "$@" "Sync.tla"
