@@ -1,0 +1,2 @@
+vendor/** linguist-vendored -diff
+supply-chain/imports.lock linguist-generated

@@ -25,7 +25,7 @@ Data na iCloudu jsou důležitější než rychlost synchronizace. Když si apli
 - obousměrná synchronizace vybraných složek a režim jen pro čtení
 - řešení konfliktů, koš, brzda hromadných změn, deník
 - okno stavu, oznámení, ikona v liště
-- rozhraní česky a anglicky
+- rozhraní česky a anglicky, další jazyky doplní překladatelé
 
 Přijde později: soubory na vyžádání, ikony stavu ve správci souborů, více účtů, iCloud Fotky a sdílené složky.
 
@@ -36,6 +36,10 @@ Mimo rozsah: kalendář a kontakty (ty pokrývá CalDAV/CardDAV v GNOME a KDE), 
 Celé to bude v Rustu. Synchronizační démon poběží jako uživatelská služba a GUI v GTK4 a libadwaita s ním bude mluvit přes D-Bus. Chybějící oficiální dokumentaci API nahradí znalosti z backendu `iclouddrive` v [rclone](https://rclone.org/iclouddrive/) a z knihovny [pyicloud](https://pypi.org/project/pyicloud/).
 
 Bezpečnostní vrstvu hlídají testy, model checking (TLA+ a Kani) a deterministická simulace. Distribuovat se bude hlavně přes Flatpak.
+
+## Překlady
+
+Texty aplikace jsou v souborech [`i18n/<jazyk>/ikeloud.ftl`](i18n/) ve formátu [Fluent](https://projectfluent.org/). Nový jazyk přidáte tak, že zkopírujete složku `i18n/en` pod kódem svého jazyka (například `i18n/de`) a přeložíte texty napravo od `=`. Programovat k tomu nemusíte.
 
 ## Upozornění
 

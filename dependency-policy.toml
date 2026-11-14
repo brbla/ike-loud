@@ -39,3 +39,10 @@ dev = []
 internal = ["ikeloud-api"]
 external = []
 dev = []
+
+# Překlady: jediný obal knihoven Fluent. Na safety závisí kvůli převodu
+# důvodů a zamítnutí na klíče zpráv; safety sama zůstává bez závislostí.
+[crates.ikeloud-i18n]
+internal = ["ikeloud-safety"]
+external = ["fluent-bundle", "unic-langid"]
+dev = []

@@ -2,6 +2,8 @@
 //!
 //! Prvních pět řádků je příklad ze zadání (kapitola Testování).
 
+#![allow(clippy::expect_used, clippy::panic)] // testovací kód smí spadnout
+
 use std::time::Duration;
 
 use ikeloud_safety::nazvy::ChybaNazvu;
