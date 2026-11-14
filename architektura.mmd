@@ -1,0 +1,19 @@
+flowchart TD
+    local["Složka ~/iCloud<br/>lokální kopie, sleduje inotify"]
+    gui["ikeloud-gui<br/>průvodce, tray, okno"]
+    subgraph daemon["ikeloud-daemon (Background portal / systemd user service)"]
+        sync["ikeloud-sync<br/>porovná stavy, sestaví plán"]
+        safety["ikeloud-safety<br/>pustí, odloží, nebo zastaví"]
+        api["ikeloud-api<br/>přihlášení, přenosy, koš"]
+        state[("Stav (SQLite)<br/>poslední společný stav")]
+        keyring["Klíčenka<br/>trust token, cookies"]
+    end
+    icloud["Servery iCloud<br/>neoficiální webové API"]
+
+    local <--> sync
+    gui <-- "D-Bus" --> daemon
+    sync <--> state
+    sync -- "plán akcí" --> safety
+    safety -- "jen schválené akce" --> api
+    api --> keyring
+    api <-- "HTTPS" --> icloud

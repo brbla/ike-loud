@@ -2,7 +2,7 @@
 
 Neoficiální klient pro iCloud Drive na Linuxu. Soubory z iCloudu se objeví jako běžná složka v domovském adresáři a změny se propíšou na iPhone a Mac. Nastavení zvládne i člověk, který nikdy neotevřel terminál.
 
-> **Stav:** projekt je ve fázi zadání. Zatím neexistuje kód ani instalovatelná verze. Podrobný návrh je v [zadani.md](zadani.md).
+> **Stav:** projekt je ve fázi zadání. Zatím neexistuje kód ani instalovatelná verze. Zadání a plán realizace jsou v [ike-loud-zadani-a-plan.md](ike-loud-zadani-a-plan.md), schéma architektury v [architektura.mmd](architektura.mmd) a přehled podkladů v [PODKLADY.md](PODKLADY.md).
 
 ## Proč
 

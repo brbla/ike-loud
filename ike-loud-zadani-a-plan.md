@@ -1,35 +1,50 @@
-# ike loud – zadání
+# ike loud – zadání a plán realizace
 
-Nov 13, 2026 · @Brbla
+Stav k 14. 11. 2026 · Brbla
+
+Tento soubor spojuje dva podklady: **Část 1: Zadání** (co se staví a jak se to má chovat) a **Část 2: Plán realizace** (milníky, brány, odhady). Diagram architektury je v části 1 jako Mermaid.
+
+---
+
+# Část 1: Zadání
 
 ## Cíl a pro koho
 
-ike loud zpřístupní soubory z iCloud Drive na Linuxu jako běžnou složku v domácím adresáři, bez příkazové řádky. Apple oficiální klienta pro Linux nevydává, takže lidé s placeným iCloudem dnes na Linuxu zůstávají u webu icloud.com.
+ike loud zpřístupní soubory z iCloud Drive na Linuxu jako běžnou složku v domácím adresáři, bez příkazové řádky. Apple oficiálního klienta pro Linux nevydává, takže lidé s placeným iCloudem dnes na Linuxu zůstávají u webu icloud.com.
 
 - **Cílový uživatel:** laik, který má iPhone nebo Mac a na počítači Linux (Ubuntu, Fedora, Mint, CachyOS). Nezná rclone ani systemd.
-- **Hlavní použití:** otevřít, upravit a uložit soubor z iCloud Drive stejně jako lokální soubor; změny se objeví na iPhonu a Macu.
+- **Hlavní použití:** otevřít, upravit a uložit soubor z iCloud Drive stejně jako lokální soubor; změny se objeví na iPhonu a Macu.
 - **Měřítko úspěchu:** žádný ztracený ani poškozený soubor na iCloudu; nastavení do 5 minut; aplikace běží týdny bez zásahu.
 
 ## Základní principy
 
 Když si aplikace není jistá, nic nemění a zeptá se. Pomalá nebo nedokončená synchronizace je přijatelná, zničená data na iCloudu ne.
 
-1. **iCloud je zdroj pravdy.** Lokální složka je kopie; při pochybnosti vítězí verze na serveru a lokální se odloží stranou.
+1. **Při pochybnosti rozhoduje iCloud.** Běžná úprava na Linuxu se normálně nahraje na iCloud. Jen když se soubor mezitím změnil i jinde, nebo si aplikace není jistá, zůstane na serveru jeho verze a lokální se uloží vedle jako konfliktní kopie. Nic se nezahodí.
 2. **Nic se nepřepisuje naslepo.** Každý zápis na server ověří, že soubor je stále ve verzi, kterou aplikace zná (etag). Jinak vznikne konfliktní kopie.
 3. **Mazání je vratné.** Smazání na Linuxu jde na iCloudu do „Nedávno smazané“, nikdy trvale.
 4. **Hromadné změny mají brzdu.** Když by jeden běh smazal nebo přepsal víc než nastavený limit souborů, synchronizace se zastaví a čeká na potvrzení.
 5. **Neúplná data se nikdy nenahrají.** Soubor se nahrává až po dokončení zápisu; stažení jde do dočasného souboru a ten se přejmenuje až po kontrole velikosti a kontrolního součtu.
 6. **Každá akce je v deníku.** Uživatel vidí, co se kdy nahrálo, stáhlo a smazalo, a může ji vrátit obnovením z koše nebo z lokální historie.
 
+Rozhodovací tabulka synchronizace (podle posledního společného stavu):
+
+| Co se změnilo od poslední synchronizace | Co aplikace udělá |
+| --- | --- |
+| Jen soubor na Linuxu | Nahraje ho na iCloud |
+| Jen soubor na iCloudu | Stáhne ho na Linux |
+| Obojí | Na iCloudu zůstane jeho verze, lokální se uloží vedle jako konfliktní kopie |
+| Nic | Nic |
+
 ## Uživatelský zážitek
 
-Uživatel aplikaci nainstaluje, jednou se přihlásí a pak už jen používá složku **iCloud** v domovském adresáři.
+Uživatel aplikaci nainstaluje, jednou se přihlásí a pak už jen používá složku **iCloud** v domovském adresáři.
 
 **První spuštění (průvodce):**
 
 1. Přihlášení Apple účtem: e-mail a heslo, s nabídkou „Zapamatovat heslo v klíčence“.
 2. Dvoufázové ověření: kód z iPhonu nebo SMS, se srozumitelnou nápovědou.
-3. Pokud má účet zapnutou pokročilou ochranu dat (ADP), průvodce vysvětlí, že na iPhonu musí povolit „Přístup k datům iCloudu na webu“ a potvrdit výzvu.
+3. Pokud má účet zapnutou pokročilou ochranu dat (ADP), průvodce vysvětlí, že na iPhonu musí povolit „Přístup k datům iCloudu na webu“ a potvrdit výzvu.
 4. Výběr složek k synchronizaci. Výchozí je vše, pokud se to vejde na disk. Nevybrané složky na Linuxu nejsou; stahování při otevření přijde až později.
 5. První běh jen stahuje. Zápis na iCloud se zapne až po dokončení a kontrole prvního stažení, bez dotazu na „režim“. Režim jen pro čtení jde kdykoli zapnout v nastavení.
 
@@ -37,7 +52,7 @@ Uživatel aplikaci nainstaluje, jednou se přihlásí a pak už jen používá s
 
 - Stav je vidět v okně aplikace a v oznámeních: synchronizováno, probíhá, čeká na potvrzení, chyba. Ikona v liště je doplněk tam, kde ji prostředí umí; GNOME ji ve výchozím stavu nemá.
 - Oznámení jen tehdy, když je potřeba jednat: konflikt, vypršelé přihlášení, zastavená hromadná změna.
-- Okno aplikace: stav, deník změn, konflikty k vyřešení, nastavení, tlačítko „Otevřít složku“.
+- Okno aplikace: stav, deník změn, konflikty k vyřešení, nastavení, tlačítko „Otevřít složku“.
 - Opakované přihlášení (Apple dává důvěru zařízení obvykle na 30 dní): aplikace upozorní tři dny předem a synchronizace mezitím bezpečně stojí. S uloženým heslem stačí zadat kód, bez něj heslo a kód.
 - Rozhraní česky a anglicky; texty bez technických pojmů.
 
@@ -70,12 +85,34 @@ Celé je to v Rustu: synchronizační démon jako uživatelská služba a odděl
 
 - `ikeloud-api`: klient iCloud webových služeb. Přihlášení (SRP-6a, 2FA, trust token, ADP/PCS cookies), výpis složek, stahování, nahrávání, přesun do koše. Žádná synchronizační logika.
 - `ikeloud-sync`: synchronizační engine. Porovná tři stavy (lokální, vzdálený, poslední společný) a vytvoří plán akcí. Plán projde bezpečnostní vrstvou, teprve pak se provádí.
-- `ikeloud-safety`: pravidla z kapitoly Ochrana dat. Jediné místo, které smí pustit zápis na server.
+- `ikeloud-safety`: pravidla z kapitoly Ochrana dat. Jediné místo, které smí pustit zápis na server.
 - `ikeloud-daemon`: běží na pozadí (ve Flatpaku přes Background portal, v nativních balíčcích jako systemd user service). Lokální změny hlásí inotify jako nápovědu; pravdu dává pravidelný úplný průchod složkou. Serveru se ptá šetrně.
 - `ikeloud-gui`: průvodce, okno stavu, tray ikona, oznámení.
 - `ikeloud-cli`: diagnostika pro pokročilé a pro hlášení chyb.
 
-&#91;embedded content: architektura ike loud · 8 částí\]
+**Diagram architektury** (na server zapisuje jen to, co pustí bezpečnostní vrstva):
+
+```mermaid
+flowchart TD
+    local["Složka ~/iCloud<br/>lokální kopie, sleduje inotify"]
+    gui["ikeloud-gui<br/>průvodce, tray, okno"]
+    subgraph daemon["ikeloud-daemon (Background portal / systemd user service)"]
+        sync["ikeloud-sync<br/>porovná stavy, sestaví plán"]
+        safety["ikeloud-safety<br/>pustí, odloží, nebo zastaví"]
+        api["ikeloud-api<br/>přihlášení, přenosy, koš"]
+        state[("Stav (SQLite)<br/>poslední společný stav")]
+        keyring["Klíčenka<br/>trust token, cookies"]
+    end
+    icloud["Servery iCloud<br/>neoficiální webové API"]
+
+    local <--> sync
+    gui <-- "D-Bus" --> daemon
+    sync <--> state
+    sync -- "plán akcí" --> safety
+    safety -- "jen schválené akce" --> api
+    api --> keyring
+    api <-- "HTTPS" --> icloud
+```
 
 Žádná cesta ze synchronizace na server nevede mimo ikeloud-safety; GUI s démonem mluví jen přes D-Bus.
 
@@ -93,7 +130,7 @@ Celé je to v Rustu: synchronizační démon jako uživatelská služba a odděl
 | IPC | `zbus` (D-Bus) |
 | Soubory na vyžádání (později) | `fuser` (FUSE) |
 
-**Odkud vzít znalost API:** oficiální dokumentace neexistuje. Vzorem jsou dvě udržované open-source implementace: backend `iclouddrive` v [rclone](https://rclone.org/iclouddrive/) (Go, od verze 1.69, podporuje i ADP) a [pyicloud](https://pypi.org/project/pyicloud/) (Python, poslední vydání říjen 2026). Obě jsou pod licencí MIT, takže port do Rustu je možný s uvedením autorů.
+**Odkud vzít znalost API:** oficiální dokumentace neexistuje. Vzorem jsou dvě udržované open-source implementace: backend `iclouddrive` v [rclone](https://rclone.org/iclouddrive/) (Go, od verze 1.69, podporuje i ADP) a [pyicloud](https://pypi.org/project/pyicloud/) (Python, poslední vydání říjen 2026). Obě jsou pod licencí MIT, takže port do Rustu je možný s uvedením autorů.
 
 **Záložní plán:** pokud by vlastní klient v Rustu ve fázi 0 narazil, démon může jako transportní vrstvu použít přibalené rclone. Bezpečnostní vrstva, stav i GUI zůstanou v Rustu.
 
@@ -201,7 +238,7 @@ Změnu typu zachytí Rust už při překladu. Změnu hodnoty při stejném typu 
 
 **Testování:**
 
-- Samostatný testovací Apple účet s iCloud Drive pro všechny integrační testy; nikdy ne účet vývojáře.
+- Samostatný testovací Apple účet s iCloud Drive pro všechny integrační testy; nikdy ne účet vývojáře.
 - Simulátor serveru (fake `ikeloud-api`) pro testy engine: konflikty, výpadky, prázdné výpisy, přerušené přenosy.
 - Property-based testy (`proptest`): náhodné sekvence změn na obou stranách; tvrzení, že žádný obsah nezmizí bez záznamu v koši nebo konfliktu.
 - Testy pádu: zabít démona v náhodném okamžiku a ověřit konzistenci po restartu.
@@ -210,11 +247,11 @@ Změnu typu zachytí Rust už při překladu. Změnu hodnoty při stejném typu 
 **Distribuce:**
 
 - Flatpak na Flathubu jako hlavní kanál (jedna instalace pro všechny distribuce).
-- AppImage a balíčky .deb a .rpm z GitHub Releases.
+- AppImage a balíčky .deb a .rpm z GitHub Releases.
 - AUR pro Arch a CachyOS.
 - Open source (MIT nebo Apache-2.0), aby kódu důvěřovali i lidé, kteří mu svěřují Apple účet.
 
-**Fáze:**
+**Fáze (přehled; závazné členění je v části 2, Milníky):**
 
 1. **Fáze 0, ověření:** přihlášení vlastním Rust klientem (SRP, 2FA, ADP), výpis, stažení, nahrání a přesun do koše na testovacím účtu. Rozhodne, zda vlastní klient, nebo záložní rclone. Současně vznikne TLA+ model synchronizace, který musí projít před začátkem fáze 2.
 2. **Fáze 1, jen čtení:** démon a GUI, které iCloud pouze stahují do lokální složky. Na server se nezapisuje nic.
@@ -222,10 +259,158 @@ Změnu typu zachytí Rust už při překladu. Změnu hodnoty při stejném typu 
 4. **Fáze 3, veřejné vydání 1.0:** Flathub, česká a anglická lokalizace, dokumentace pro laiky.
 5. **Fáze 4, rozšíření:** soubory na vyžádání (FUSE), integrace do správců souborů, Fotky jen pro čtení.
 
-Podrobné milníky s výstupními kritérii a odhady: Plán realizace
-
 ## Zdroje
 
 - [rclone: iCloud Drive backend](https://rclone.org/iclouddrive/)
 - [pyicloud na PyPI](https://pypi.org/project/pyicloud/2026.10.1/)
 - [icloud-linux (FUSE mount v Pythonu)](https://github.com/Bougakov/icloud-linux)
+
+---
+
+# Část 2: Plán realizace
+
+Zadání je dobrý základ a tři úvodní rozhodnutí už padla. Zbývá milník 0, který ověří, co neoficiální API opravdu umí. Plán má šest milníků; každý končí měřitelnou bránou a bez jejího splnění se nepokračuje. Na iCloud se poprvé zapisuje až v milníku 3, po tom, co synchronizační jádro projde simulací.
+
+Odhady počítají s jedním vývojářem na zhruba poloviční úvazek, který pracuje s kódovacími agenty. Jsou to odhady, ne závazky; nejvíc je může posunout milník 0.
+
+## Co revize zadání našla
+
+Tyto věci jsou už opravené přímo v zadání (část 1):
+
+- **Průvodce bez technické volby.** Volba „jen čtení, nebo plná synchronizace“ zmizela. První běh vždy jen stahuje a zápis se zapne až po kontrole prvního stažení.
+- **Rozpor s MVP.** Průvodce sliboval stahování při otevření, které je až po vydání. V první verzi se vybírají složky k synchronizaci.
+- **GNOME nemá lištu s ikonami.** Stav musí být vidět v okně a v oznámeních; ikona v liště je jen doplněk.
+- **Brzda hromadných změn** by se u malých složek spouštěla pořád. Práh je nově 50 souborů, nebo 10 souborů a zároveň 10 % obsahu.
+- **Chyběla pravidla** pro přejmenování a přesuny, českou diakritiku v názvech, dočasné soubory, plné úložiště a odhlášení.
+- **Lokální historie je povinná,** ne volitelná. Je to jediná jistá cesta zpět, pokud server nevynucuje zápis podmíněný verzí.
+- **Flatpak:** démon běží přes Background portal a tokeny jdou přes Secret portal.
+
+## Tři rozhodnutí (14. 11. 2026)
+
+| Rozhodnutí | Výsledek | Co z toho plyne |
+| --- | --- | --- |
+| Heslo k Apple účtu | Nabídnout uložení do klíčenky při přihlášení | S uloženým heslem stačí po 30 dnech zadat kód; bez něj heslo a kód. |
+| Název | „ike loud“ zůstává | Riziko námitky Applu nebo Flathubu trvá. Slovo „iCloud“ jen v popisu a vlastní ikona. Záložní název je „loud ike“; technické identifikátory (ikeloud) se při přejmenování nemění. Kdyby Flathub odmítl i tak, zůstávají AppImage, .deb, .rpm a AUR. |
+| Vzdálená pojistka | Ano | Denní dotaz na podepsaný stavový soubor, vypínatelný v nastavení. |
+
+## Laťka kvality
+
+Produkt je složka, ne aplikace: uživatel má na ike loud zapomenout. Body níže jsou výstupní kritéria milníků, ne přání.
+
+- **Jedna věc, dotažená.** Jen iCloud Drive. Všechno ostatní je „ne“, dokud není venku verze 1.0.
+- **Tři obrazovky do první složky:** přihlášení, kód, výběr složek. Žádná volba, které laik nerozumí.
+- **Žádná technická chybová hláška.** Každá zpráva říká, co se stalo, že jsou soubory v bezpečí, a nabízí jedno tlačítko.
+- **Ticho.** Oznámení jen tehdy, když musí uživatel něco udělat.
+- **Lehkost.** V klidu pod 1 % procesoru a pod 60 MB paměti; první soubor ve složce do minuty po přihlášení.
+- **Detaily.** Vlastní ikona, čeština psaná člověkem, přístupnost pro čtečky obrazovky, tmavý režim.
+
+## Co musí zjistit milník 0
+
+Odpovědi rozhodnou o architektuře. Veřejná dokumentace neexistuje, takže se zjišťují pokusem na testovacím účtu.
+
+| Otázka | Když je odpověď „ne“ |
+| --- | --- |
+| Vynucuje server zápis podmíněný verzí (etag)? | Kontrola těsně před zápisem a po něm, povinná lokální historie. Okno pro souběh zůstane a musí být v TLA+ modelu. |
+| Vrací server kontrolní součet souboru? | Ověření podle velikosti a zpětného stažení vzorku; kontrolní běh bude pomalejší. |
+| Jde levně zjistit, co se změnilo (mění se etag složky se změnou uvnitř)? | Úplný průchod stromem s omezenou frekvencí; u velkých knihoven zpoždění v minutách. |
+| Zachová přejmenování a přesun ID dokumentu? | Přesun jako kopie a koš; brzda musí počítat přesuny zvlášť. |
+| Jde položku z „Nedávno smazané“ obnovit? | Mazání na serveru se v první verzi vypne nebo si vyžádá potvrzení. |
+| Kolik dotazů snese účet bez omezování? | Určí interval dotazování a rychlost prvního stažení. |
+| Projde přihlášení s ADP vlastním klientem v Rustu? | Záložní plán: rclone jako transportní vrstva. |
+
+## Milníky
+
+Do verze 1.0 je to zhruba 8 až 9 měsíců. Pořadí se oproti fázím v zadání liší v jednom: synchronizační jádro se nejdřív dokončí proti falešnému serveru a teprve potom smí zapisovat na skutečný iCloud.
+
+| Milník | Výsledek | Odhad |
+| --- | --- | --- |
+| 0. Průzkum a model | Odpovědi na otázky výše, TLA+ model, rozhodnutí o klientovi | 4–5 týdnů |
+| 1. Jen čtení | Aplikace, která iCloud bezpečně stahuje | 6–8 týdnů |
+| 2. Jádro v simulaci | Synchronizace a bezpečnostní vrstva hotové proti falešnému serveru | 6–8 týdnů |
+| 3. Zápis a uzavřená beta | Obousměrná synchronizace u 5–10 lidí | 6 týdnů práce + 6 týdnů provozu |
+| 4. Vydání 1.0 | Flathub, balíčky, nápověda, web | 4–6 týdnů |
+| 5. Po vydání | Soubory na vyžádání, správci souborů, Fotky | průběžně |
+
+### Milník 0: průzkum a model
+
+- Testovací Apple účet, repozitář, Cargo workspace a CI od prvního dne (testy, clippy, pokrytí, připnuté závislosti, cargo deny a cargo vet).
+- Prototyp `ikeloud-api`: přihlášení (SRP, 2FA, ADP), výpis, stažení, nahrání, přejmenování, koš.
+- Pokusy k otázkám z předchozí kapitoly; každý výsledek zapsaný jako rozhodnutí v repozitáři.
+- TLA+ model synchronizace včetně souběhu, který API nedokáže vyloučit.
+- Návrh tří obrazovek průvodce a ikony.
+
+**Brána:** všechny otázky mají odpověď z pokusu, ne z odhadu. TLA+ model projde bez porušení invariantů. Je rozhodnuto mezi vlastním klientem a rclone.
+
+### Milník 1: jen čtení
+
+- Produkční `ikeloud-api`: typované chyby, opakování, omezení rychlosti, pevný seznam domén.
+- Stav v SQLite, stahování do dočasných souborů, obnova po pádu.
+- Démon, D-Bus rozhraní a GUI: průvodce, okno stavu, oznámení, opětovné přihlášení.
+- Flatpak balíček hned, aby sandbox nepřekvapil na konci.
+- Denní kanárek: automatická kontrola proti testovacímu účtu.
+
+**Brána:** 14 dní běhu na testovacím účtu bez zásahu. Strom s 20 000 soubory stažený a ověřený. Zabití démona v 1 000 náhodných okamžicích nepoškodí stav. Pět laiků projde instalací a průvodcem do 5 minut bez pomoci. V síťovém záznamu není jediný požadavek na zápis.
+
+### Milník 2: jádro v simulaci
+
+- Falešný server s řízeným časem a poruchami.
+- `ikeloud-sync`: plán ze tří stavů, přesuny, konflikty, normalizace názvů.
+- `ikeloud-safety`: pravidla z kapitoly Ochrana dat a schvalovací token v typovém systému.
+- Tabulkové testy, proptest, Kani, mutation testing a deterministická simulace.
+
+**Brána:** milion simulovaných scénářů bez ztráty obsahu. Pokrytí aspoň 90 %. V `ikeloud-safety` nepřežije žádný mutant bez zdůvodněné výjimky. Kani ověří brzdu a schvalování. Každé pravidlo z Ochrany dat má test, že nebezpečnou akci zastaví.
+
+### Milník 3: zápis a uzavřená beta
+
+- Zápis proti testovacímu účtu: nahrání, přepsání, přesun, koš.
+- Deník změn, obrazovka konfliktů, potvrzení hromadné změny, lokální historie.
+- Kontrolní běh na pozadí a vzdálená pojistka.
+- Beta: nejdřív vlastní kopie dat, potom 5–10 pozvaných lidí, kteří mají zálohu.
+
+**Brána:** 30 dní zápisů na testovacím účtu bez neshody v kontrolním běhu. Šest týdnů bety bez jediného ztraceného nebo poškozeného souboru. Každý nahlášený problém má test, který ho reprodukuje. Cvičná změna API přepne klienty do režimu jen pro čtení.
+
+### Milník 4: vydání 1.0
+
+- Flathub, AppImage, .deb, .rpm a AUR.
+- Čeština a angličtina; nápověda pro laiky a stránka „Co dělat, když…“.
+- Web, který na první pohled říká, že nejde o produkt Applu.
+- Postup pro rychlou opravu: od rozbitého API k vydání do 48 hodin.
+- Revize kódu, který pracuje s heslem, někým druhým.
+
+**Brána:** test použitelnosti s pěti novými laiky. Žádná známá chyba s rizikem pro data. Opravné vydání vyzkoušené nanečisto.
+
+### Milník 5: po vydání
+
+Soubory na vyžádání (FUSE), integrace do Nautilu a Dolphinu, Fotky jen pro čtení a více účtů. Každé rozšíření přijde až tehdy, když provoz verze 1.0 ukáže stabilitu.
+
+## Jak se bude pracovat
+
+- Nejdřív tabulka testů, potom kód. Zadání pro kódovacího agenta je tabulka vstupů a očekávaných výstupů.
+- `ikeloud-safety` čte člověk řádek po řádku; proto je záměrně malá.
+- Změna chování začíná změnou zadání a TLA+ modelu, ne kódu.
+- Hlavní větev je vždy vydatelná; od milníku 1 vychází sestavení každé dva týdny.
+
+Cizí kód se volá jen přes vlastní obal s testy smlouvy. Aktualizace knihoven jsou záměrné, po jedné a s přečteným rozdílem; podrobnosti jsou v části 1 v kapitole o testování.
+
+## Největší rizika plánu
+
+| Riziko | Co s ním |
+| --- | --- |
+| Apple změní nebo zablokuje přihlášení | Kanárek, vzdálená pojistka, záložní rclone. Otevřeně říkat, že klient je neoficiální. |
+| Server nevynucuje podmíněný zápis | Lokální historie, kontrola před zápisem a po něm, souběh v modelu. |
+| Námitka k názvu | Název zůstává. Vlastní ikona a „iCloud“ jen v popisu; při námitce přejmenování na „loud ike“, případně distribuce mimo Flathub. |
+| Jeden vývojář | Malý rozsah verze 1.0, automatizované vydávání, open source od prvního dne. |
+
+## První týden
+
+- [x] Rozhodnout tři otázky z úvodu.
+- [ ] Založit testovací Apple účet s dvoufázovým ověřením a zjistit, zda na něm půjde zapnout ADP.
+- [ ] Založit repozitář, Cargo workspace a CI.
+- [ ] Zaznamenat v prohlížeči přihlášení a práci s Drive na icloud.com a porovnat s kódem rclone a pyicloud.
+- [ ] První průchod v Rustu: přihlášení a výpis kořenové složky.
+- [ ] Kostra TLA+ modelu se třemi stavy.
+
+## Zdroje
+
+- [Flathub: požadavky na aplikace](https://docs.flathub.org/docs/for-app-authors/metainfo-guidelines/quality-guidelines)
+- [rclone: iCloud Drive backend](https://rclone.org/iclouddrive/)
