@@ -1,0 +1,13 @@
+[package]
+name = "ikeloud-daemon"
+description = "Démon ike loud: synchronizace na pozadí."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

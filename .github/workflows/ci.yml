@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # Nástroje CI jsou připnuté přesně; aktualizace jen záměrně, jedna na změnu.
+  CARGO_DENY_VERSION: 0.18.3
+  CARGO_AUDIT_VERSION: 0.21.2
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain z rust-toolchain.toml
+        run: rustup toolchain install
+
+      - name: Formát
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Testy
+        run: cargo test --workspace --locked
+
+      - name: Pravidla závislostí
+        run: python3 scripts/check-deps.py
+
+  supply-chain:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalace cargo-deny a cargo-audit
+        run: |
+          cargo install --locked cargo-deny --version "$CARGO_DENY_VERSION"
+          cargo install --locked cargo-audit --version "$CARGO_AUDIT_VERSION"
+
+      - name: cargo deny
+        run: cargo deny check
+
+      - name: cargo audit
+        run: cargo audit

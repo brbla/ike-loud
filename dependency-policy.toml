@@ -1,0 +1,41 @@
+# Které závislosti smí který crate mít. Hlídá scripts/check-deps.py v CI.
+#
+# Pravidla (zadání, kapitola o cizím kódu):
+# - Cizí knihovnu volá jen jeden crate, její obal. Proto se každý externí
+#   crate smí objevit v `external` nejvýš u jednoho crate z workspace.
+# - ikeloud-safety nepoužívá nic kromě standardní knihovny.
+# - Cesta na server vede jen přes ikeloud-safety: ikeloud-sync na
+#   ikeloud-api nezávisí a zápis v ikeloud-api vyžaduje schválení ze safety.
+#
+# Nová závislost = nový řádek tady se zdůvodněním v komentáři.
+# `dev` platí jen pro testy a pravidlo jednoho obalu se na něj nevztahuje.
+
+[crates.ikeloud-safety]
+internal = []
+external = []
+dev = []
+
+[crates.ikeloud-api]
+internal = ["ikeloud-safety"]
+external = []
+dev = []
+
+[crates.ikeloud-sync]
+internal = ["ikeloud-safety"]
+external = []
+dev = []
+
+[crates.ikeloud-daemon]
+internal = ["ikeloud-api", "ikeloud-sync", "ikeloud-safety"]
+external = []
+dev = []
+
+[crates.ikeloud-gui]
+internal = []
+external = []
+dev = []
+
+[crates.ikeloud-cli]
+internal = ["ikeloud-api"]
+external = []
+dev = []
