@@ -11,7 +11,7 @@
 mod db;
 
 use ikeloud_safety::RelPath;
-use ikeloud_sync::BaseEntry;
+use ikeloud_sync::{BaseEntry, DocId};
 
 pub use db::{SCHEMA_VERSION, StateDb};
 
@@ -42,10 +42,10 @@ pub enum StateError {
 /// One change of the last common state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BaseChange {
-    /// Insert or replace the entry for this file (matched by normalized name).
+    /// Insert or replace the entry of this document.
     Set(BaseEntry),
-    /// Remove the entry for this path (no-op if there is none).
-    Forget(RelPath),
+    /// Remove the entry of this document (no-op if there is none).
+    Forget(DocId),
 }
 
 /// Kind of a journal entry.

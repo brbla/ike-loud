@@ -54,5 +54,4 @@ dočasný název i na serveru; model ho pak musí pokrýt.
 
 ## Co dál
 
-Plánovač v `ikeloud-sync` zatím přesuny nepozná (0004). Až je bude umět,
-musí odpovídat tomuto modelu.
+Plánovač v `ikeloud-sync` přesuny umí a odpovídá tomuto modelu (0010).

@@ -10,4 +10,4 @@ pub mod plan;
 pub mod state;
 
 pub use plan::{Collision, Plan, Side, build_plan};
-pub use state::{BaseEntry, ContentHash, LocalFile, RemoteFile, States};
+pub use state::{BaseEntry, ContentHash, DocId, LocalFile, RemoteFile, States};

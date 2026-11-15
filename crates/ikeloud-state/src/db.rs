@@ -4,7 +4,7 @@ use std::path::Path;
 
 use ikeloud_safety::{Etag, RelPath};
 use ikeloud_sync::names::key;
-use ikeloud_sync::{BaseEntry, ContentHash};
+use ikeloud_sync::{BaseEntry, ContentHash, DocId};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{BaseChange, JournalEntry, JournalKind, StateError};
@@ -14,10 +14,12 @@ pub const SCHEMA_VERSION: i64 = 1;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE base (
-    key  TEXT PRIMARY KEY NOT NULL,
-    path TEXT NOT NULL CHECK (path <> ''),
-    hash TEXT NOT NULL CHECK (hash <> ''),
-    etag TEXT NOT NULL CHECK (etag <> '')
+    doc_id TEXT PRIMARY KEY NOT NULL CHECK (doc_id <> ''),
+    inode  INTEGER NOT NULL UNIQUE,
+    key    TEXT NOT NULL UNIQUE,
+    path   TEXT NOT NULL CHECK (path <> ''),
+    hash   TEXT NOT NULL CHECK (hash <> ''),
+    etag   TEXT NOT NULL CHECK (etag <> '')
 ) STRICT;
 CREATE TABLE journal (
     id     INTEGER PRIMARY KEY,
@@ -94,17 +96,9 @@ impl StateDb {
     pub fn base(&self) -> Result<Vec<BaseEntry>, StateError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT path, hash, etag FROM base ORDER BY key")
+            .prepare("SELECT path, inode, doc_id, hash, etag FROM base ORDER BY key")
             .map_err(sql)?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(BaseEntry {
-                    path: RelPath::new(r.get::<_, String>(0)?),
-                    hash: ContentHash::new(r.get::<_, String>(1)?),
-                    etag: Etag::new(r.get::<_, String>(2)?),
-                })
-            })
-            .map_err(sql)?;
+        let rows = stmt.query_map([], base_row).map_err(sql)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(sql)
     }
 
@@ -112,15 +106,9 @@ impl StateDb {
     pub fn base_entry(&self, path: &RelPath) -> Result<Option<BaseEntry>, StateError> {
         self.conn
             .query_row(
-                "SELECT path, hash, etag FROM base WHERE key = ?1",
+                "SELECT path, inode, doc_id, hash, etag FROM base WHERE key = ?1",
                 params![key(path.as_str())],
-                |r| {
-                    Ok(BaseEntry {
-                        path: RelPath::new(r.get::<_, String>(0)?),
-                        hash: ContentHash::new(r.get::<_, String>(1)?),
-                        etag: Etag::new(r.get::<_, String>(2)?),
-                    })
-                },
+                base_row,
             )
             .optional()
             .map_err(sql)
@@ -134,29 +122,33 @@ impl StateDb {
         journal: &[JournalEntry],
     ) -> Result<(), StateError> {
         let tx = self.conn.transaction().map_err(sql)?;
+        // First remove every entry the commit touches, then insert the new
+        // ones: uniqueness of names and inodes is checked on the final state,
+        // so e.g. two files swapping names in one commit is fine, while two
+        // documents ending up with one name still fails the whole commit.
         for change in changes {
-            match change {
-                BaseChange::Set(e) => {
-                    tx.execute(
-                        "INSERT INTO base (key, path, hash, etag) VALUES (?1, ?2, ?3, ?4)
-                         ON CONFLICT (key) DO UPDATE SET
-                             path = excluded.path, hash = excluded.hash, etag = excluded.etag",
-                        params![
-                            key(e.path.as_str()),
-                            e.path.as_str(),
-                            e.hash.as_str(),
-                            e.etag.as_str()
-                        ],
-                    )
-                    .map_err(sql)?;
-                }
-                BaseChange::Forget(path) => {
-                    tx.execute(
-                        "DELETE FROM base WHERE key = ?1",
-                        params![key(path.as_str())],
-                    )
-                    .map_err(sql)?;
-                }
+            let doc = match change {
+                BaseChange::Set(e) => &e.doc_id,
+                BaseChange::Forget(doc) => doc,
+            };
+            tx.execute("DELETE FROM base WHERE doc_id = ?1", params![doc.as_str()])
+                .map_err(sql)?;
+        }
+        for change in changes {
+            if let BaseChange::Set(e) = change {
+                tx.execute(
+                    "INSERT INTO base (doc_id, inode, key, path, hash, etag)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        e.doc_id.as_str(),
+                        inode_to_sql(e.inode),
+                        key(e.path.as_str()),
+                        e.path.as_str(),
+                        e.hash.as_str(),
+                        e.etag.as_str()
+                    ],
+                )
+                .map_err(sql)?;
             }
         }
         for entry in journal {
@@ -214,6 +206,25 @@ impl StateDb {
         }
         Ok(entries)
     }
+}
+
+fn base_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BaseEntry> {
+    Ok(BaseEntry {
+        path: RelPath::new(r.get::<_, String>(0)?),
+        inode: inode_from_sql(r.get::<_, i64>(1)?),
+        doc_id: DocId::new(r.get::<_, String>(2)?),
+        hash: ContentHash::new(r.get::<_, String>(3)?),
+        etag: Etag::new(r.get::<_, String>(4)?),
+    })
+}
+
+/// SQLite integers are signed; inodes are stored bit for bit.
+fn inode_to_sql(inode: u64) -> i64 {
+    i64::from_ne_bytes(inode.to_ne_bytes())
+}
+
+fn inode_from_sql(value: i64) -> u64 {
+    u64::from_ne_bytes(value.to_ne_bytes())
 }
 
 #[cfg(test)]
@@ -279,7 +290,7 @@ mod tests {
             let mut conn = rusqlite::Connection::open(&path).expect("raw open");
             let tx = conn.transaction().expect("begin");
             tx.execute(
-                "INSERT INTO base (key, path, hash, etag) VALUES ('a', 'a', 'h', 'e')",
+                "INSERT INTO base (doc_id, inode, key, path, hash, etag) VALUES ('d', 1, 'a', 'a', 'h', 'e')",
                 [],
             )
             .expect("insert");

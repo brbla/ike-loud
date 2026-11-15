@@ -30,8 +30,5 @@ rozhodovací tabulky ze zadání. Logika odpovídá akci `Plan` v `tla/Sync.tla`
   součtu ze serveru nejde poznat, že je obsah stejný. Jestli server součet
   vrací, je otázka milníku 0; pokud ano, shodný obsah se jen zapíše do
   společného stavu.
-- **Přesuny a přejmenování** plánovač zatím pozná jen jako smazání
-  a nový soubor. Zadání chce přesun podle inode a ID dokumentu; doplní se
-  spolu s rozšířením TLA+ modelu. Do té doby brzda hromadných změn zachytí
-  velký přesun jako hromadné mazání.
+- ~~Přesuny a přejmenování~~: hotovo v rozhodnutí 0010.
 - Prázdné složky se nesynchronizují.

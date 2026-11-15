@@ -557,13 +557,22 @@ fn case_collisions() {
             deferred(1, vec![DeferReason::CaseCollision { with: p("a.txt") }]),
         ),
         (
-            "move onto a colliding name",
+            "moving another file onto a colliding name",
             vec![Action::MoveRemote {
-                from: p("Photo.jpg"),
+                from: p("Documents/Příloha.pdf"),
                 to: p("PHOTO.JPG"),
                 expected_etag: e("v1"),
             }],
             collision("Photo.jpg"),
+        ),
+        (
+            "renaming a file to another letter case of its own name",
+            vec![Action::MoveRemote {
+                from: p("Photo.jpg"),
+                to: p("PHOTO.jpg"),
+                expected_etag: e("v1"),
+            }],
+            ok(1),
         ),
         (
             "same name in another folder",

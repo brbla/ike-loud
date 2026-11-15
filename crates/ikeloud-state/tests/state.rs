@@ -6,22 +6,24 @@ use std::path::PathBuf;
 
 use ikeloud_safety::{Etag, RelPath};
 use ikeloud_state::{BaseChange, JournalEntry, JournalKind, StateDb, StateError};
-use ikeloud_sync::{BaseEntry, ContentHash};
+use ikeloud_sync::{BaseEntry, ContentHash, DocId};
 
-fn entry(path: &str, hash: &str, etag: &str) -> BaseEntry {
+fn entry(path: &str, inode: u64, doc: &str, hash: &str, etag: &str) -> BaseEntry {
     BaseEntry {
         path: RelPath::new(path),
+        inode,
+        doc_id: DocId::new(doc),
         hash: ContentHash::new(hash),
         etag: Etag::new(etag),
     }
 }
 
-fn set(path: &str, hash: &str, etag: &str) -> BaseChange {
-    BaseChange::Set(entry(path, hash, etag))
+fn set(path: &str, inode: u64, doc: &str, hash: &str, etag: &str) -> BaseChange {
+    BaseChange::Set(entry(path, inode, doc, hash, etag))
 }
 
-fn forget(path: &str) -> BaseChange {
-    BaseChange::Forget(RelPath::new(path))
+fn forget(doc: &str) -> BaseChange {
+    BaseChange::Forget(DocId::new(doc))
 }
 
 fn log(time: u64, kind: JournalKind, path: &str, target: Option<&str>) -> JournalEntry {
@@ -62,37 +64,57 @@ fn common_state_changes() {
         ("empty database", vec![], vec![]),
         (
             "entries come back sorted by normalized name",
-            vec![vec![set("b.txt", "h1", "e1"), set("A.txt", "h2", "e2")]],
-            vec![entry("A.txt", "h2", "e2"), entry("b.txt", "h1", "e1")],
-        ),
-        (
-            "set replaces the entry of the same file",
-            vec![vec![set("a", "h1", "e1")], vec![set("a", "h2", "e2")]],
-            vec![entry("a", "h2", "e2")],
-        ),
-        (
-            "different case is the same file; the new path is kept",
+            vec![vec![
+                set("b.txt", 1, "d1", "h1", "e1"),
+                set("A.txt", 2, "d2", "h2", "e2"),
+            ]],
             vec![
-                vec![set("Photo.jpg", "h1", "e1")],
-                vec![set("photo.jpg", "h1", "e2")],
+                entry("A.txt", 2, "d2", "h2", "e2"),
+                entry("b.txt", 1, "d1", "h1", "e1"),
             ],
-            vec![entry("photo.jpg", "h1", "e2")],
         ),
         (
-            "NFD and NFC are the same file",
+            "set replaces the entry of the same document",
             vec![
-                vec![set("Pr\u{30c}i\u{301}loha", "h1", "e1")],
-                vec![set("Příloha", "h2", "e2")],
+                vec![set("a", 1, "d1", "h1", "e1")],
+                vec![set("a", 1, "d1", "h2", "e2")],
             ],
-            vec![entry("Příloha", "h2", "e2")],
+            vec![entry("a", 1, "d1", "h2", "e2")],
+        ),
+        (
+            "a move keeps the document and changes the path",
+            vec![
+                vec![set("a", 1, "d1", "h", "e")],
+                vec![set("dir/b", 1, "d1", "h", "e")],
+            ],
+            vec![entry("dir/b", 1, "d1", "h", "e")],
+        ),
+        (
+            "a new inode after a save replaces the old one",
+            vec![
+                vec![set("a", 1, "d1", "h", "e")],
+                vec![set("a", 77, "d1", "h", "e")],
+            ],
+            vec![entry("a", 77, "d1", "h", "e")],
+        ),
+        (
+            "two files swap names in one commit",
+            vec![
+                vec![set("a", 1, "d1", "h1", "e1"), set("b", 2, "d2", "h2", "e2")],
+                vec![set("b", 1, "d1", "h1", "e1"), set("a", 2, "d2", "h2", "e2")],
+            ],
+            vec![
+                entry("a", 2, "d2", "h2", "e2"),
+                entry("b", 1, "d1", "h1", "e1"),
+            ],
         ),
         (
             "forget removes",
             vec![
-                vec![set("a", "h", "e"), set("b", "h", "e")],
-                vec![forget("a")],
+                vec![set("a", 1, "d1", "h", "e"), set("b", 2, "d2", "h", "e")],
+                vec![forget("d1")],
             ],
-            vec![entry("b", "h", "e")],
+            vec![entry("b", 2, "d2", "h", "e")],
         ),
         (
             "forget of a missing entry is a no-op",
@@ -100,9 +122,9 @@ fn common_state_changes() {
             vec![],
         ),
         (
-            "forget matches by normalized name",
-            vec![vec![set("Photo.jpg", "h", "e")], vec![forget("PHOTO.JPG")]],
-            vec![],
+            "the largest inode survives",
+            vec![vec![set("a", u64::MAX, "d1", "h", "e")]],
+            vec![entry("a", u64::MAX, "d1", "h", "e")],
         ),
     ];
     for (name, commits, expected) in cases {
@@ -115,32 +137,64 @@ fn common_state_changes() {
 }
 
 #[test]
+fn inconsistent_commits_fail_whole() {
+    // (name, change that must fail on top of entries a/d1/1 and b/d2/2)
+    let cases: Vec<(&str, Vec<BaseChange>)> = vec![
+        (
+            "another document takes a taken name",
+            vec![set("a", 3, "d3", "h", "e")],
+        ),
+        (
+            "same name in another letter case",
+            vec![set("A", 3, "d3", "h", "e")],
+        ),
+        (
+            "NFD form of a taken NFC name",
+            vec![set("Pr\u{30c}i\u{301}loha", 3, "d3", "h", "e")],
+        ),
+        (
+            "another document takes a taken inode",
+            vec![set("c", 1, "d3", "h", "e")],
+        ),
+        ("empty hash", vec![set("c", 3, "d3", "", "e")]),
+        ("empty document ID", vec![set("c", 3, "", "h", "e")]),
+    ];
+    for (name, changes) in cases {
+        let mut db = StateDb::open_in_memory().expect("open");
+        let start = vec![
+            set("a", 1, "d1", "h", "e"),
+            set("b", 2, "d2", "h", "e"),
+            set("Příloha", 9, "d9", "h", "e"),
+        ];
+        db.commit(&start, &[]).expect("commit");
+        let before = db.base().expect("read");
+        let mut all = vec![forget("d2")];
+        all.extend(changes);
+        let result = db.commit(&all, &[log(1, JournalKind::Uploaded, "x", None)]);
+        assert!(
+            matches!(result, Err(StateError::Sql(_))),
+            "{name}: {result:?}"
+        );
+        assert_eq!(
+            db.base().expect("read"),
+            before,
+            "{name}: nothing of the commit is stored"
+        );
+        assert_eq!(db.journal(10).expect("read"), vec![], "{name}");
+    }
+}
+
+#[test]
 fn lookup_of_one_entry() {
     let mut db = StateDb::open_in_memory().expect("open");
-    db.commit(&[set("Docs/Report.odt", "h", "e")], &[])
+    db.commit(&[set("Docs/Report.odt", 1, "d1", "h", "e")], &[])
         .expect("commit");
     assert_eq!(
         db.base_entry(&RelPath::new("docs/report.odt"))
             .expect("read"),
-        Some(entry("Docs/Report.odt", "h", "e"))
+        Some(entry("Docs/Report.odt", 1, "d1", "h", "e"))
     );
     assert_eq!(db.base_entry(&RelPath::new("missing")).expect("read"), None);
-}
-
-#[test]
-fn a_failing_commit_stores_nothing() {
-    let mut db = StateDb::open_in_memory().expect("open");
-    db.commit(&[set("kept", "h", "e")], &[]).expect("commit");
-
-    // The second change violates a constraint (empty hash); the first change
-    // and the journal entry of the same commit must not be stored either.
-    let result = db.commit(
-        &[set("new", "h", "e"), set("bad", "", "e"), forget("kept")],
-        &[log(1, JournalKind::Uploaded, "new", None)],
-    );
-    assert!(matches!(result, Err(StateError::Sql(_))), "{result:?}");
-    assert_eq!(db.base().expect("read"), vec![entry("kept", "h", "e")]);
-    assert_eq!(db.journal(10).expect("read"), vec![]);
 }
 
 #[test]
@@ -211,13 +265,16 @@ fn state_survives_reopening() {
     {
         let mut db = StateDb::open(&dir.db()).expect("create");
         db.commit(
-            &[set("a", "h", "e")],
+            &[set("a", 1, "d1", "h", "e")],
             &[log(7, JournalKind::Downloaded, "a", None)],
         )
         .expect("commit");
     }
     let db = StateDb::open(&dir.db()).expect("reopen");
-    assert_eq!(db.base().expect("read"), vec![entry("a", "h", "e")]);
+    assert_eq!(
+        db.base().expect("read"),
+        vec![entry("a", 1, "d1", "h", "e")]
+    );
     assert_eq!(
         db.journal(10).expect("read"),
         vec![log(7, JournalKind::Downloaded, "a", None)]
@@ -233,8 +290,13 @@ fn a_second_handle_sees_committed_state() {
     let dir = TempDir::new("two");
     let mut writer = StateDb::open(&dir.db()).expect("writer");
     let reader = StateDb::open(&dir.db()).expect("reader");
-    writer.commit(&[set("a", "h", "e")], &[]).expect("commit");
-    assert_eq!(reader.base().expect("read"), vec![entry("a", "h", "e")]);
+    writer
+        .commit(&[set("a", 1, "d1", "h", "e")], &[])
+        .expect("commit");
+    assert_eq!(
+        reader.base().expect("read"),
+        vec![entry("a", 1, "d1", "h", "e")]
+    );
 }
 
 #[test]

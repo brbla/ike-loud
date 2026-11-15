@@ -213,8 +213,15 @@ fn case_collisions(
         let Some(new) = new_remote_path(action) else {
             continue;
         };
+        // Renaming a document to a different letter case of its own name is
+        // not a collision: the only holder of that name is the document itself.
+        let renamed_from = match action {
+            Action::MoveRemote { from, .. } => Some(from),
+            _ => None,
+        };
         let key = names::case_insensitive_key(new.as_str());
         match taken.get(&key) {
+            Some(existing) if Some(existing) == renamed_from => {}
             Some(existing) if existing != new => {
                 collisions.insert(new.clone(), existing.clone());
             }

@@ -415,23 +415,27 @@ fn slash_from_a_translation_stays_in_the_folder() {
 #[test]
 fn planner_with_a_translated_copy_name() {
     use ikeloud_safety::Etag;
-    use ikeloud_sync::{BaseEntry, ContentHash, LocalFile, RemoteFile, States, build_plan};
+    use ikeloud_sync::{BaseEntry, ContentHash, DocId, LocalFile, RemoteFile, States, build_plan};
 
     let cs = lang("cs");
     let states = States {
         local: vec![LocalFile {
             path: RelPath::new("zprava.odt"),
+            inode: 1,
             hash: ContentHash::new("h2"),
             size: 1,
             stable_for: std::time::Duration::from_secs(60),
         }],
         remote: vec![RemoteFile {
             path: RelPath::new("zprava.odt"),
+            doc_id: DocId::new("d1"),
             etag: Etag::new("e2"),
             size: 1,
         }],
         base: vec![BaseEntry {
             path: RelPath::new("zprava.odt"),
+            inode: 1,
+            doc_id: DocId::new("d1"),
             hash: ContentHash::new("h1"),
             etag: Etag::new("e1"),
         }],
