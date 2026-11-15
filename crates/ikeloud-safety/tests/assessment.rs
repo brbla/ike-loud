@@ -832,3 +832,49 @@ fn approved_action_carries_the_original_action() {
     };
     assert_eq!(approved.action(), &action);
 }
+
+#[test]
+fn a_plan_is_confirmed_only_if_the_confirmation_covers_it() {
+    let c = context(200);
+    let Err(Rejection::MassChangeNeedsConfirmation(summary)) = assess(delete(60), &c) else {
+        panic!("expected the brake");
+    };
+    let mut with = c.clone();
+    with.confirmation = Some(summary.confirm());
+    let confirmed = |plan: Vec<Action>, c: &Context| match assess(plan, c) {
+        Ok(Decision::Approved(p)) => p.confirmed,
+        other => panic!("approved: {other:?}"),
+    };
+    // (name, plan, context, confirmed)
+    let cases: Vec<(&str, Vec<Action>, &Context, bool)> = vec![
+        ("the confirmed plan", delete(60), &with, true),
+        (
+            "a part of it (the rest after an outage)",
+            delete(3),
+            &with,
+            true,
+        ),
+        (
+            "a small plan the confirmation does not cover",
+            vec![trash("f150", "v1")],
+            &with,
+            false,
+        ),
+        (
+            "a covered deletion and a file the user did not see",
+            vec![trash("f0", "v1"), trash("f150", "v1")],
+            &with,
+            false,
+        ),
+        (
+            "no change to confirm (uploads only)",
+            vec![upload("n", None)],
+            &with,
+            false,
+        ),
+        ("no confirmation", delete(3), &c, false),
+    ];
+    for (name, plan, context, expected) in cases {
+        assert_eq!(confirmed(plan, context), expected, "{name}");
+    }
+}

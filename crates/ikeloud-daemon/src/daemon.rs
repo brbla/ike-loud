@@ -178,9 +178,11 @@ impl<'a> Daemon<'a> {
             self.confirmation.clone(),
             SystemTime::now(),
         );
-        // A confirmation is used up once a run got past the safety layer;
-        // until then (offline, …) it waits for the next run.
-        if matches!(outcome, Ok(RunOutcome::Ran(_))) {
+        // A confirmation is used up once a run carried out its whole plan;
+        // until then (offline before or during the run) it waits for the
+        // next run, or the rest of a confirmed change would ask again
+        // (decision 0020, TLA+ model SyncBrake).
+        if matches!(&outcome, Ok(RunOutcome::Ran(r)) if r.executed.stopped.is_none()) {
             self.confirmation = None;
         }
         self.schedule

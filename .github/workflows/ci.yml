@@ -132,6 +132,26 @@ jobs:
           fi
           grep -q "Invariant NoForeignPairing is violated" tlc-bug.log
 
+      - name: TLA+ models of names and of the mass-change brake
+        run: |
+          scripts/tlc.sh SyncNames.cfg
+          scripts/tlc.sh SyncBrake.cfg
+
+      # Each must still find the bug it was written for (decision 0020).
+      - name: The names and brake models catch their bugs
+        run: |
+          must_fail() { # config, expected violation
+            if scripts/tlc.sh "$1" > tlc-bug.log 2>&1; then
+              echo "error: $1 no longer finds its bug" >&2
+              exit 1
+            fi
+            grep -q "Invariant $2 is violated" tlc-bug.log
+          }
+          must_fail SyncNamesExact.cfg NoRenameChurn
+          must_fail SyncBrakeConfirmFirst.cfg NoNeedlessQuestion
+          must_fail SyncBrakeDropConfirmation.cfg NoNeedlessQuestion
+          must_fail SyncBrakeRecordAny.cfg NoSilentMassDeletion
+
   supply-chain:
     runs-on: ubuntu-24.04
     env:

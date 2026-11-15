@@ -56,6 +56,12 @@ pub struct ApprovedPlan {
     pub actions: Vec<ApprovedAction>,
     /// Actions that are not carried out now.
     pub deferred: Vec<DeferredAction>,
+    /// The user's confirmation of a mass change covers every change of this
+    /// plan (and there is some). Once the plan is carried out, the brake
+    /// window starts again (decision 0020); a confirmation that does not
+    /// cover the plan must not restart it, or deletions the user never saw
+    /// would not count.
+    pub confirmed: bool,
 }
 
 /// Result of the assessment when sync may continue.
@@ -164,7 +170,7 @@ pub fn assess(plan: Vec<Action>, context: &Context) -> Result<Decision, Rejectio
     }
 
     check_conflicts(&to_run, &context.remote_etags)?;
-    check_mass_change(&to_run, context)?;
+    let confirmed = check_mass_change(&to_run, context)?;
     check_space(&to_run, context)?;
 
     Ok(Decision::Approved(ApprovedPlan {
@@ -173,6 +179,7 @@ pub fn assess(plan: Vec<Action>, context: &Context) -> Result<Decision, Rejectio
             .map(|action| ApprovedAction { action })
             .collect(),
         deferred,
+        confirmed,
     }))
 }
 
@@ -291,7 +298,9 @@ fn check_conflicts(actions: &[Action], remote: &BTreeMap<RelPath, Etag>) -> Resu
     }
 }
 
-fn check_mass_change(actions: &[Action], context: &Context) -> Result<(), Rejection> {
+/// Stops a mass change the user has not confirmed. `Ok(true)`: the user's
+/// confirmation covers every change of the plan.
+fn check_mass_change(actions: &[Action], context: &Context) -> Result<bool, Rejection> {
     let mut files: Vec<Change> = actions.iter().filter_map(Action::change).collect();
     files.sort();
     files.dedup();
@@ -316,7 +325,7 @@ fn check_mass_change(actions: &[Action], context: &Context) -> Result<(), Reject
     if brakes && !confirmed {
         Err(Rejection::MassChangeNeedsConfirmation(summary))
     } else {
-        Ok(())
+        Ok(confirmed && !summary.files.is_empty())
     }
 }
 

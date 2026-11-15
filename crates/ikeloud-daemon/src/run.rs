@@ -162,26 +162,14 @@ pub fn start_run(
         .collect();
     context.settle_time = settle_time;
     context.recent = recent_changes(db, now)?;
-    let confirmed = confirmation.is_some();
     context.confirmation = confirmation;
 
-    let (approved, deferred) = match assess(plan.actions, &context) {
-        Ok(Decision::NothingToDo) => (vec![], vec![]),
-        Ok(Decision::Approved(p)) => (p.actions, p.deferred),
+    let (approved, deferred, confirmed) = match assess(plan.actions, &context) {
+        Ok(Decision::NothingToDo) => (vec![], vec![], false),
+        Ok(Decision::Approved(p)) => (p.actions, p.deferred, p.confirmed),
         Err(rejection) => return Ok(Started::Ended(RunOutcome::Rejected(rejection))),
     };
-    if confirmed && let Some(first) = approved.first() {
-        // The brake window starts again from here.
-        db.record(
-            &JournalEntry {
-                time: unix_secs(now),
-                kind: JournalKind::MassChangeConfirmed,
-                path: first.action().path().clone(),
-                target: None,
-            },
-            None,
-        )?;
-    }
+    let first_path = approved.first().map(|a| a.action().path().clone());
 
     let mut effects = RunEffects {
         disk,
@@ -191,6 +179,23 @@ pub fn start_run(
         record_failed: false,
     };
     let executed = execute(approved, &mut effects);
+    // The brake window starts again after what the user confirmed, and only
+    // if the confirmation covered the plan (decision 0020, found by the TLA+
+    // model SyncBrake): recorded before the actions, the confirmed changes
+    // would count against the next plan; recorded for a plan it does not
+    // cover, deletions the user never saw would not count. A crash before
+    // this line only makes the brake count the confirmed changes once more.
+    if confirmed && let Some(path) = first_path {
+        db.record(
+            &JournalEntry {
+                time: unix_secs(now),
+                kind: JournalKind::MassChangeConfirmed,
+                path,
+                target: None,
+            },
+            None,
+        )?;
+    }
     Ok(Started::Executed(ExecutedRun {
         base: states.base,
         remote_before: states.remote,

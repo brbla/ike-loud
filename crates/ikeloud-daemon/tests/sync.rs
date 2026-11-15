@@ -196,6 +196,14 @@ fn a_mass_deletion_waits_for_the_user() {
         "the confirmation is in the journal and restarts the brake window"
     );
     f.settle();
+
+    // The confirmed deletions do not count against the next one (they did
+    // while the confirmation was recorded before them: TLA+ SyncBrake).
+    f.remove("f55.txt");
+    let RunOutcome::Ran(r) = f.run_with(None) else {
+        panic!("one more deletion after a confirmed mass deletion needs no question");
+    };
+    assert_eq!(r.executed.done.len(), 1);
 }
 
 #[test]
