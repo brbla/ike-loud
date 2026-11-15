@@ -11,3 +11,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+ikeloud-safety = { path = "../ikeloud-safety" }
+# Normalizace názvů (NFC): „Příloha“ z Macu a z Linuxu je tentýž soubor. Jediný obal.
+unicode-normalization = { version = "=0.1.25", default-features = false }

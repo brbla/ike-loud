@@ -58,3 +58,14 @@ jen-cteni-nastaveni = Writing to iCloud is turned off in settings.
 jen-cteni-prvni-stazeni = Writing to iCloud turns on once the first download has finished and been checked.
 jen-cteni-neznama-odpoved-api = iCloud answered unexpectedly. To be safe, nothing is written to it until a fixed version is out.
 jen-cteni-vzdalena-pojistka = Apple changed iCloud. To be safe, nothing is written to it until a fixed version is out.
+
+## File names
+
+# Name of a conflict copy. $nazev is the name without extension, $pripona
+# includes the dot (may be empty), $datum looks like 2026-11-15, $poradi
+# is 1 for the first copy that day. Do not use the slash “/”.
+konfliktni-kopie =
+    { $nazev } ({ $poradi ->
+        [1] Linux conflict { $datum }
+       *[other] Linux conflict { $datum } { $poradi }
+    }){ $pripona }

@@ -9,6 +9,7 @@
 //! Tento crate je jediný obal knihoven Fluent.
 
 mod jazyk;
+mod kopie;
 mod zpravy;
 
 use std::collections::BTreeMap;

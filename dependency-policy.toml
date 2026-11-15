@@ -22,7 +22,8 @@ dev = []
 
 [crates.ikeloud-sync]
 internal = ["ikeloud-safety"]
-external = []
+# unicode-normalization: porovnání názvů po NFC (zadání, pravidla pro názvy)
+external = ["unicode-normalization"]
 dev = []
 
 [crates.ikeloud-daemon]
@@ -45,4 +46,5 @@ dev = []
 [crates.ikeloud-i18n]
 internal = ["ikeloud-safety"]
 external = ["fluent-bundle", "unic-langid"]
-dev = []
+# ikeloud-sync jen v testu, který ověří plánovač s přeloženým názvem kopie.
+dev = ["ikeloud-sync"]

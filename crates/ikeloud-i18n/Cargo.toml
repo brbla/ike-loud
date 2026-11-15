@@ -15,3 +15,6 @@ ikeloud-safety = { path = "../ikeloud-safety" }
 # Fluent (Mozilla): překlady s českými tvary množného čísla. Jediný obal.
 fluent-bundle = { version = "=0.16.0", default-features = false }
 unic-langid = { version = "=0.9.6", default-features = false }
+
+[dev-dependencies]
+ikeloud-sync = { path = "../ikeloud-sync" }

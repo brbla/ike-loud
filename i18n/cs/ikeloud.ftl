@@ -60,3 +60,14 @@ jen-cteni-nastaveni = Zápis na iCloud je vypnutý v nastavení.
 jen-cteni-prvni-stazeni = Zápis na iCloud se zapne, až se dokončí a zkontroluje první stažení.
 jen-cteni-neznama-odpoved-api = iCloud odpověděl neočekávaně. Pro jistotu se na něj nezapisuje, dokud nevyjde opravená verze.
 jen-cteni-vzdalena-pojistka = Apple změnil iCloud. Pro jistotu se na něj nezapisuje, dokud nevyjde opravená verze.
+
+## Názvy souborů
+
+# Název konfliktní kopie souboru. $nazev je název bez přípony, $pripona
+# včetně tečky (může být prázdná), $datum ve tvaru 2026-11-15, $poradi
+# je 1 u první kopie toho dne. Nepoužívejte lomítko „/“.
+konfliktni-kopie =
+    { $nazev } ({ $poradi ->
+        [1] konflikt Linux { $datum }
+       *[other] konflikt Linux { $datum } { $poradi }
+    }){ $pripona }

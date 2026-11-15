@@ -95,6 +95,15 @@ fn vsechny_zpravy() -> Vec<Zprava> {
         zpravy.push(Zprava::new(klic).s("hodnota", Hodnota::Text("1".into())));
     }
     zpravy.push(Zprava::new("oddelovac-desetin"));
+    for poradi in [1, 2] {
+        zpravy.push(
+            Zprava::new("konfliktni-kopie")
+                .s("nazev", Hodnota::Text("a".into()))
+                .s("pripona", Hodnota::Text(".txt".into()))
+                .s("datum", Hodnota::Text("2026-11-15".into()))
+                .s("poradi", Hodnota::Cislo(poradi)),
+        );
+    }
     zpravy
 }
 
@@ -347,4 +356,103 @@ fn chyby_ve_slozce() {
         Preklady::s_adresarem(&["fr".into()], d.cesta()).map(|p| p.jazyky()),
         Ok(vec!["en".to_string()])
     );
+}
+
+// --- názvy konfliktních kopií ----------------------------------------------
+
+#[test]
+fn nazev_konfliktni_kopie() {
+    let pripady: &[(&str, &str, u32, &str)] = &[
+        (
+            "cs",
+            "zprava.odt",
+            1,
+            "zprava (konflikt Linux 2026-11-15).odt",
+        ),
+        (
+            "cs",
+            "Dokumenty/Příloha.pdf",
+            1,
+            "Dokumenty/Příloha (konflikt Linux 2026-11-15).pdf",
+        ),
+        (
+            "cs",
+            "zprava.odt",
+            3,
+            "zprava (konflikt Linux 2026-11-15 3).odt",
+        ),
+        ("cs", "README", 1, "README (konflikt Linux 2026-11-15)"),
+        (
+            "cs",
+            "a/.bashrc",
+            1,
+            "a/.bashrc (konflikt Linux 2026-11-15)",
+        ),
+        (
+            "en",
+            "report.odt",
+            1,
+            "report (Linux conflict 2026-11-15).odt",
+        ),
+        (
+            "en",
+            "report.odt",
+            2,
+            "report (Linux conflict 2026-11-15 2).odt",
+        ),
+    ];
+    for (kod, cesta, poradi, ocekavano) in pripady {
+        assert_eq!(
+            jazyk(kod).nazev_konfliktni_kopie(&Cesta::new(*cesta), "2026-11-15", *poradi),
+            Cesta::new(*ocekavano),
+            "{kod} {cesta} {poradi}"
+        );
+    }
+}
+
+#[test]
+fn lomitko_z_prekladu_neopusti_slozku() {
+    let d = DocasnaSlozka::new("lomitko");
+    d.jazyk("xx", "konfliktni-kopie = { $nazev }/kopie{ $pripona }\n");
+    let p = Preklady::s_adresarem(&["xx".into()], d.cesta()).expect("načtení");
+    assert_eq!(
+        p.nazev_konfliktni_kopie(&Cesta::new("d/a.txt"), "2026-11-15", 1),
+        Cesta::new("d/a-kopie.txt")
+    );
+}
+
+#[test]
+fn planovac_s_prelozenym_nazvem_kopie() {
+    use ikeloud_safety::Etag;
+    use ikeloud_sync::{
+        LokalniSoubor, OtiskObsahu, SpolecnyStav, Stavy, VzdalenySoubor, sestavit_plan,
+    };
+
+    let cs = jazyk("cs");
+    let stavy = Stavy {
+        lokalni: vec![LokalniSoubor {
+            cesta: Cesta::new("zprava.odt"),
+            otisk: OtiskObsahu::new("o2"),
+            velikost: 1,
+            stabilni_po: std::time::Duration::from_secs(60),
+        }],
+        vzdalene: vec![VzdalenySoubor {
+            cesta: Cesta::new("zprava.odt"),
+            etag: Etag::new("e2"),
+            velikost: 1,
+        }],
+        spolecne: vec![SpolecnyStav {
+            cesta: Cesta::new("zprava.odt"),
+            otisk: OtiskObsahu::new("o1"),
+            etag: Etag::new("e1"),
+        }],
+        ..Stavy::default()
+    };
+    let plan = sestavit_plan(&stavy, &|c, n| {
+        cs.nazev_konfliktni_kopie(c, "2026-11-15", n)
+    });
+    assert!(plan.akce.contains(&Akce::NahratKonfliktniKopii {
+        cesta: Cesta::new("zprava (konflikt Linux 2026-11-15).odt"),
+        velikost: 1,
+    }));
 }
