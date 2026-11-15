@@ -99,6 +99,16 @@ version = "0.4.15"
 criteria = "safe-to-deploy"
 notes = "Přihlášení SRP (ikeloud-api/src/srp.rs), 2026-11-15. Kryptografie RustCrypto / num-bigint a jejich závislosti; vlastní audit nebo důvěra autorovi čeká na rozhodnutí (docs/rozhodnuti/0005)."
 
+[[exemptions.inotify]]
+version = "0.11.5"
+criteria = "safe-to-deploy"
+notes = "Sledování složky (ikeloud-local/src/watch.rs), 2026-11-15. Not audited yet; we trust nobody (docs/rozhodnuti/0007)."
+
+[[exemptions.inotify-sys]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Sledování složky (ikeloud-local/src/watch.rs), 2026-11-15. Not audited yet; we trust nobody (docs/rozhodnuti/0007)."
+
 [[exemptions.intl-memoizer]]
 version = "0.5.3"
 criteria = "safe-to-deploy"

@@ -1,5 +1,6 @@
 //! Scanning the synced folder.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, Metadata};
 use std::io;
 use std::os::unix::fs::MetadataExt;
@@ -16,6 +17,108 @@ pub struct Scan {
     pub files: Vec<LocalFile>,
     /// Entries that are not synced, with the reason; shown to the user.
     pub skipped: Vec<Skipped>,
+    /// How many files were read to hash them (the others were unchanged
+    /// since the scan that hashed them, see [`HashCache`]).
+    pub hashed: usize,
+}
+
+/// Content hashes from earlier scans, so a file that has not changed is not
+/// read again: without it every scan reads the whole folder, and the daemon
+/// scans after every change.
+///
+/// A hash is reused only for the same file (device, inode, birth time) with
+/// the same size, modification time and status change time (ctime), all to
+/// the nanosecond. No program can set ctime; any write or rename moves it to
+/// the current time. One hole stays: a write in the same clock tick as the
+/// hashing leaves ctime as it was (filesystems keep coarse time stamps, FAT
+/// even two-second ones). So a hash is trusted only if the file had not
+/// changed for [`HashCache::margin`] when its hashing started; until then the
+/// file is read again at every scan, as git does with "racily clean" files.
+/// What is left is a clock set back by hand to the same nanosecond; the
+/// daemon starts from an empty cache once a day.
+#[derive(Debug)]
+pub struct HashCache {
+    margin: Duration,
+    entries: BTreeMap<(u64, u64), Cached>,
+}
+
+#[derive(Debug, Clone)]
+struct Cached {
+    stamp: Stamp,
+    hash: ContentHash,
+    /// The file had been unchanged for the margin when hashing started.
+    trusted: bool,
+}
+
+/// What must stay the same for a hash to be reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    id: LocalId,
+    size: u64,
+    mtime: (i64, i64),
+    ctime: (i64, i64),
+}
+
+impl Stamp {
+    fn of(meta: &Metadata) -> Self {
+        Self {
+            id: local_id(meta),
+            size: meta.len(),
+            mtime: (meta.mtime(), meta.mtime_nsec()),
+            ctime: (meta.ctime(), meta.ctime_nsec()),
+        }
+    }
+}
+
+impl Default for HashCache {
+    fn default() -> Self {
+        Self::new(Self::MARGIN)
+    }
+}
+
+impl HashCache {
+    /// The default margin: above the two-second time stamps of FAT.
+    pub const MARGIN: Duration = Duration::from_secs(3);
+
+    /// An empty cache that trusts a hash once the file had been unchanged
+    /// for `margin` when it was hashed.
+    #[must_use]
+    pub fn new(margin: Duration) -> Self {
+        Self {
+            margin,
+            entries: BTreeMap::new(),
+        }
+    }
+
+    /// The margin, see the type.
+    #[must_use]
+    pub fn margin(&self) -> Duration {
+        self.margin
+    }
+
+    /// Forgets every hash: the next scan reads every file.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Number of remembered hashes.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether no hash is remembered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn reusable(&self, stamp: &Stamp) -> Option<&ContentHash> {
+        self.entries
+            .get(&(stamp.id.device, stamp.id.inode))
+            .filter(|c| c.trusted && c.stamp == *stamp)
+            .map(|c| &c.hash)
+    }
 }
 
 /// An entry the scan did not take.
@@ -61,12 +164,20 @@ pub enum ScanError {
     },
 }
 
-/// Scans `root`. `now` is the time the scan counts stability against.
+/// Scans `root`, reading every file. `now` is the time the scan counts
+/// stability against.
 ///
 /// A file whose size, modification time or identity changes while it is
 /// being hashed is reported as just changed (`stable_for` zero): its hash
 /// may be of a half-written file, and the planner leaves such files alone.
 pub fn scan(root: &Path, now: SystemTime) -> Result<Scan, ScanError> {
+    scan_with(root, now, &mut HashCache::default())
+}
+
+/// Scans `root` like [`scan`], reading only files that changed since `cache`
+/// learnt their hashes. After a complete scan the cache holds the hashes of
+/// this scan; after a failed one it is left as it was.
+pub fn scan_with(root: &Path, now: SystemTime, cache: &mut HashCache) -> Result<Scan, ScanError> {
     let meta = fs::symlink_metadata(root).map_err(|e| match e.kind() {
         io::ErrorKind::NotFound => ScanError::Missing,
         kind => ScanError::Unreadable {
@@ -77,56 +188,120 @@ pub fn scan(root: &Path, now: SystemTime) -> Result<Scan, ScanError> {
     if !meta.is_dir() {
         return Err(ScanError::NotADirectory);
     }
-    let mut result = Scan::default();
-    walk(root, "", now, &mut result)?;
-    Ok(result)
+    let mut walker = Walker {
+        now,
+        old: cache,
+        new: BTreeMap::new(),
+        out: Scan::default(),
+    };
+    walker.walk(root, "")?;
+    let Walker { new, out, .. } = walker;
+    cache.entries = new;
+    Ok(out)
 }
 
-fn walk(dir: &Path, rel: &str, now: SystemTime, out: &mut Scan) -> Result<(), ScanError> {
-    let unreadable = |e: io::Error| ScanError::Unreadable {
-        folder: rel.to_owned(),
-        kind: e.kind(),
-    };
-    let mut entries: Vec<(PathBuf, std::ffi::OsString)> = Vec::new();
-    for entry in fs::read_dir(dir).map_err(unreadable)? {
-        let entry = entry.map_err(unreadable)?;
-        entries.push((entry.path(), entry.file_name()));
-    }
-    for (path, name) in entries {
-        let skip = |reason| Skipped {
-            path: join(rel, &name.to_string_lossy()),
-            reason,
+struct Walker<'a> {
+    now: SystemTime,
+    old: &'a HashCache,
+    new: BTreeMap<(u64, u64), Cached>,
+    out: Scan,
+}
+
+impl Walker<'_> {
+    fn walk(&mut self, dir: &Path, rel: &str) -> Result<(), ScanError> {
+        let unreadable = |e: io::Error| ScanError::Unreadable {
+            folder: rel.to_owned(),
+            kind: e.kind(),
         };
-        let Some(name) = name.to_str() else {
-            out.skipped.push(skip(SkipReason::NotUtf8));
-            continue;
-        };
-        let rel_path = join(rel, name);
-        let meta = match fs::symlink_metadata(&path) {
-            Ok(m) => m,
-            Err(e) => {
-                out.skipped.push(skip(SkipReason::Unreadable(e.kind())));
+        let mut entries: Vec<(PathBuf, std::ffi::OsString)> = Vec::new();
+        for entry in fs::read_dir(dir).map_err(unreadable)? {
+            let entry = entry.map_err(unreadable)?;
+            entries.push((entry.path(), entry.file_name()));
+        }
+        for (path, name) in entries {
+            let skip = |reason| Skipped {
+                path: join(rel, &name.to_string_lossy()),
+                reason,
+            };
+            let Some(name) = name.to_str() else {
+                self.out.skipped.push(skip(SkipReason::NotUtf8));
                 continue;
-            }
-        };
-        let kind = meta.file_type();
-        if kind.is_symlink() {
-            out.skipped.push(skip(SkipReason::Symlink));
-        } else if kind.is_dir() {
-            walk(&path, &rel_path, now, out)?;
-        } else if !kind.is_file() {
-            out.skipped.push(skip(SkipReason::Special));
-        } else {
-            match RelPath::parse(rel_path) {
-                Err(e) => out.skipped.push(skip(SkipReason::Malformed(e))),
-                Ok(rel) => match describe(&path, rel, &meta, now) {
-                    Ok(file) => out.files.push(file),
-                    Err(e) => out.skipped.push(skip(SkipReason::Unreadable(e.kind()))),
-                },
+            };
+            let rel_path = join(rel, name);
+            let meta = match fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(e) => {
+                    self.out
+                        .skipped
+                        .push(skip(SkipReason::Unreadable(e.kind())));
+                    continue;
+                }
+            };
+            let kind = meta.file_type();
+            if kind.is_symlink() {
+                self.out.skipped.push(skip(SkipReason::Symlink));
+            } else if kind.is_dir() {
+                self.walk(&path, &rel_path)?;
+            } else if !kind.is_file() {
+                self.out.skipped.push(skip(SkipReason::Special));
+            } else {
+                match RelPath::parse(rel_path) {
+                    Err(e) => self.out.skipped.push(skip(SkipReason::Malformed(e))),
+                    Ok(rel) => match self.describe(&path, rel, &meta) {
+                        Ok(file) => self.out.files.push(file),
+                        Err(e) => self
+                            .out
+                            .skipped
+                            .push(skip(SkipReason::Unreadable(e.kind()))),
+                    },
+                }
             }
         }
+        Ok(())
     }
-    Ok(())
+
+    /// One regular file, with its hash from the cache if it is unchanged.
+    fn describe(&mut self, path: &Path, rel: RelPath, meta: &Metadata) -> io::Result<LocalFile> {
+        let stamp = Stamp::of(meta);
+        if let Some(hash) = self.old.reusable(&stamp) {
+            let hash = hash.clone();
+            self.new.insert(
+                (stamp.id.device, stamp.id.inode),
+                Cached {
+                    stamp,
+                    hash: hash.clone(),
+                    trusted: true,
+                },
+            );
+            return Ok(LocalFile {
+                path: rel,
+                id: stamp.id,
+                hash,
+                size: stamp.size,
+                stable_for: stable_for(meta, self.now),
+            });
+        }
+        let started = SystemTime::now();
+        let (file, after) = describe(path, rel, meta, self.now)?;
+        self.out.hashed += 1;
+        // Only a file that did not change while it was read may be remembered,
+        // and only trusted once it had been unchanged for the margin.
+        if file.stable_for > Duration::ZERO {
+            let stamp = Stamp::of(&after);
+            let trusted = changed_at(&after)
+                .and_then(|t| t.checked_add(self.old.margin))
+                .is_some_and(|t| t < started);
+            self.new.insert(
+                (stamp.id.device, stamp.id.inode),
+                Cached {
+                    stamp,
+                    hash: file.hash.clone(),
+                    trusted,
+                },
+            );
+        }
+        Ok(file)
+    }
 }
 
 fn join(parent: &str, name: &str) -> String {
@@ -138,12 +313,13 @@ fn join(parent: &str, name: &str) -> String {
 }
 
 /// One regular file: hashed, then checked that it did not change meanwhile.
+/// Also returns the metadata after hashing.
 fn describe(
     path: &Path,
     rel: RelPath,
     before: &Metadata,
     now: SystemTime,
-) -> io::Result<LocalFile> {
+) -> io::Result<(LocalFile, Metadata)> {
     let mut file = File::open(path)?;
     let hash = ikeloud_hash::sha256_reader(&mut file)?;
     let after = file.metadata()?;
@@ -160,7 +336,7 @@ fn describe(
         before.mtime(),
         before.mtime_nsec(),
     );
-    Ok(LocalFile {
+    let file = LocalFile {
         path: rel,
         id: local_id(&after),
         hash: ContentHash::new(ikeloud_hash::hex(&hash)),
@@ -170,23 +346,28 @@ fn describe(
         } else {
             Duration::ZERO
         },
-    })
+    };
+    Ok((file, after))
 }
 
 /// How long the file has not changed: since its last content change
 /// (mtime) or metadata change (ctime, e.g. a rename or a restored mtime),
 /// whichever is later. A time in the future counts as just now.
 fn stable_for(meta: &Metadata, now: SystemTime) -> Duration {
-    let changed = [
+    changed_at(meta)
+        .and_then(|t| now.duration_since(t).ok())
+        .unwrap_or(Duration::ZERO)
+}
+
+/// The last content or metadata change (the later of mtime and ctime).
+fn changed_at(meta: &Metadata) -> Option<SystemTime> {
+    [
         (meta.mtime(), meta.mtime_nsec()),
         (meta.ctime(), meta.ctime_nsec()),
     ]
     .into_iter()
     .filter_map(|(secs, nanos)| time_from_unix(secs, nanos))
-    .max();
-    changed
-        .and_then(|t| now.duration_since(t).ok())
-        .unwrap_or(Duration::ZERO)
+    .max()
 }
 
 fn time_from_unix(secs: i64, nanos: i64) -> Option<SystemTime> {

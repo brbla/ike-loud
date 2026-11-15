@@ -30,7 +30,7 @@ use common::{FakeICloud, copy_name};
 use ikeloud_daemon::{
     Download, Listing, Remote, RemoteError, RunOutcome, Started, SyncSetup, Written, start_run,
 };
-use ikeloud_local::LocalDisk;
+use ikeloud_local::{HashCache, LocalDisk};
 use ikeloud_safety::{ApprovedAction, DEFAULT_SETTLE_TIME, Rejection, RelPath};
 use ikeloud_state::StateDb;
 use ikeloud_sync::StopReason;
@@ -288,6 +288,8 @@ impl Server<'_> {
 struct World {
     dir: PathBuf,
     db: StateDb,
+    /// Hashes kept across runs, as the daemon keeps them.
+    hashes: HashCache,
     icloud: FakeICloud,
     user: User,
     stats: Stats,
@@ -328,6 +330,7 @@ impl World {
             },
             dir,
             db,
+            hashes: HashCache::default(),
             icloud: FakeICloud::default(),
             stats: Stats::default(),
         }
@@ -395,15 +398,17 @@ impl World {
             user: &mut self.user,
         };
         let db = &mut self.db;
+        let hashes = &mut self.hashes;
         // `None`: the daemon crashed after the first part of the run.
         let mut one = |confirmation| -> Option<RunOutcome> {
-            match start_run(&setup, &mut server, db, confirmation, now).expect("state db") {
+            match start_run(&setup, &mut server, db, hashes, confirmation, now).expect("state db") {
                 Started::Ended(outcome) => Some(outcome),
                 // The daemon dies here; what it recorded stays.
                 Started::Executed(_) if crash => None,
-                Started::Executed(run) => {
-                    Some(run.finish(&setup, &mut server, db).expect("state db"))
-                }
+                Started::Executed(run) => Some(
+                    run.finish(&setup, &mut server, db, hashes)
+                        .expect("state db"),
+                ),
             }
         };
         let mut outcome = one(None);

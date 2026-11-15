@@ -64,11 +64,12 @@ internal = []
 external = ["sha2", "pbkdf2"]
 dev = []
 
-# The local side: scanning the synced folder. Standard library only; content
-# hashes through ikeloud-hash.
+# The local side: scanning and watching the synced folder. Content hashes
+# through ikeloud-hash; inotify: change hints from the kernel (src/watch.rs),
+# std has no inotify and our code has no `unsafe`.
 [crates.ikeloud-local]
 internal = ["ikeloud-safety", "ikeloud-sync", "ikeloud-hash"]
-external = []
+external = ["inotify"]
 dev = []
 
 # Builders of test data shared by the tests of several crates. `test_only`:

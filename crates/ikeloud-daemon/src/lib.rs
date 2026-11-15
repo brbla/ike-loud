@@ -5,10 +5,18 @@
 //! actions, and store the new common state and the journal in one
 //! transaction. The server is behind [`Remote`]: the real iCloud client, or
 //! a fake one in tests.
+//!
+//! [`Daemon`] repeats runs: after local changes reported by inotify
+//! ([`spawn_watcher`]), regularly, and with growing waits after failures, as
+//! [`Schedule`] decides with the [`Timing`] of decision 0018.
 
+mod daemon;
 mod effects;
 mod remote;
 mod run;
+mod schedule;
 
+pub use daemon::{Daemon, Event, Status, spawn_watcher};
 pub use remote::{Download, Listing, Remote, RemoteError, Written};
 pub use run::{ExecutedRun, RunOutcome, RunReport, Started, SyncSetup, start_run, sync_once};
+pub use schedule::{RunResult, Schedule, Timing};

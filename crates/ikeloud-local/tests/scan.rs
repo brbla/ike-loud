@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use ikeloud_local::{Scan, ScanError, SkipReason, scan};
+use ikeloud_local::{HashCache, Scan, ScanError, SkipReason, scan, scan_with};
 use ikeloud_sync::LocalFile;
 
 struct TempDir(PathBuf);
@@ -305,4 +305,85 @@ mod with_the_planner {
             "nothing is uploaded over the deleted file's document: {actions:#?}"
         );
     }
+}
+
+#[test]
+fn unchanged_files_are_not_read_again() {
+    let dir = TempDir::new("cache");
+    dir.write("a.txt", b"one");
+    dir.write("sub/b.txt", b"two");
+    let margin = Duration::from_millis(200);
+    let mut cache = HashCache::new(margin);
+    let later = || SystemTime::now() + Duration::from_secs(60);
+
+    let first = scan_with(dir.path(), later(), &mut cache).expect("scan");
+    assert_eq!(first.hashed, 2);
+    let racy = scan_with(dir.path(), later(), &mut cache).expect("scan");
+    assert_eq!(
+        racy.hashed, 2,
+        "just written: maybe in the same clock tick as the hashing, read again"
+    );
+    std::thread::sleep(margin * 2);
+    // Read once more (unless the scan above was already past the margin),
+    // now with the files unchanged for the margin.
+    scan_with(dir.path(), later(), &mut cache).expect("scan");
+    let cached = scan_with(dir.path(), later(), &mut cache).expect("scan");
+    assert_eq!(cached.hashed, 0, "unchanged for the margin: not read");
+    let facts = |s: &Scan| {
+        let mut v: Vec<_> = s
+            .files
+            .iter()
+            .map(|f| (f.path.clone(), f.id, f.hash.clone(), f.size))
+            .collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    };
+    assert_eq!(facts(&cached), facts(&first), "and the same result");
+    assert!(file(&cached, "a.txt").stable_for > Duration::ZERO);
+    assert_eq!(cache.len(), 2);
+
+    // Same size, modification time put back: ctime still tells.
+    let path = dir.path().join("a.txt");
+    let mtime = fs::metadata(&path)
+        .expect("meta")
+        .modified()
+        .expect("mtime");
+    std::thread::sleep(Duration::from_millis(20));
+    dir.write("a.txt", b"ONE");
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .and_then(|f| f.set_modified(mtime))
+        .expect("restore mtime");
+    let edited = scan_with(dir.path(), later(), &mut cache).expect("scan");
+    assert_eq!(edited.hashed, 1);
+    assert_ne!(file(&edited, "a.txt").hash, file(&first, "a.txt").hash);
+
+    // A deleted file is forgotten; clear() reads everything again.
+    fs::remove_file(dir.path().join("sub/b.txt")).expect("rm");
+    scan_with(dir.path(), later(), &mut cache).expect("scan");
+    assert_eq!(cache.len(), 1);
+    cache.clear();
+    assert!(cache.is_empty());
+    assert_eq!(
+        scan_with(dir.path(), later(), &mut cache)
+            .expect("scan")
+            .hashed,
+        1
+    );
+}
+
+#[test]
+fn a_failed_scan_keeps_the_cache() {
+    let dir = TempDir::new("cache-fail");
+    dir.write("a.txt", b"x");
+    let mut cache = HashCache::new(Duration::ZERO);
+    scan_with(dir.path(), SystemTime::now(), &mut cache).expect("scan");
+    assert_eq!(cache.len(), 1);
+    assert_eq!(
+        scan_with(&dir.path().join("gone"), SystemTime::now(), &mut cache),
+        Err(ScanError::Missing)
+    );
+    assert_eq!(cache.len(), 1);
+    assert_eq!(HashCache::default().margin(), HashCache::MARGIN);
 }

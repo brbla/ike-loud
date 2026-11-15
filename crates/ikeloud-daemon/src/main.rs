@@ -8,7 +8,7 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    // The sync run exists (ikeloud_daemon::sync_once); the iCloud client it
-    // needs comes with the test account (milestone 0).
+    // The loop exists (ikeloud_daemon::Daemon with spawn_watcher); the
+    // iCloud client it needs comes with the test account (milestone 0).
     ExitCode::from(2)
 }

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
 
-use ikeloud_local::{LocalDisk, ScanError, Skipped, scan};
+use ikeloud_local::{HashCache, LocalDisk, ScanError, Skipped, scan_with};
 use ikeloud_safety::{
     Action, BRAKE_WINDOW, Context, Decision, DeferredAction, LocalFolderState,
     MassChangeConfirmation, RecentChanges, Rejection, RelPath, assess,
@@ -68,17 +68,19 @@ pub struct SyncSetup<'a> {
 /// [`ExecutedRun::finish`].
 ///
 /// `confirmation` is the user's answer to an earlier
-/// [`Rejection::MassChangeNeedsConfirmation`]. Errors are errors of the state
-/// database only.
+/// [`Rejection::MassChangeNeedsConfirmation`]. `hashes` are the content
+/// hashes of earlier scans (an empty cache reads every file). Errors are
+/// errors of the state database only.
 pub fn sync_once(
     setup: &SyncSetup<'_>,
     remote: &mut dyn Remote,
     db: &mut StateDb,
+    hashes: &mut HashCache,
     confirmation: Option<MassChangeConfirmation>,
     now: SystemTime,
 ) -> Result<RunOutcome, StateError> {
-    match start_run(setup, remote, db, confirmation, now)? {
-        Started::Executed(run) => run.finish(setup, remote, db),
+    match start_run(setup, remote, db, hashes, confirmation, now)? {
+        Started::Executed(run) => run.finish(setup, remote, db, hashes),
         Started::Ended(outcome) => Ok(outcome),
     }
 }
@@ -113,11 +115,12 @@ pub fn start_run(
     setup: &SyncSetup<'_>,
     remote: &mut dyn Remote,
     db: &mut StateDb,
+    hashes: &mut HashCache,
     confirmation: Option<MassChangeConfirmation>,
     now: SystemTime,
 ) -> Result<Started, StateError> {
     let (disk, settle_time) = (&setup.disk, setup.settle_time);
-    let local = match scan(disk.root(), now) {
+    let local = match scan_with(disk.root(), now, hashes) {
         Ok(s) => s,
         Err(ScanError::Missing | ScanError::NotADirectory) => {
             return Ok(Started::Ended(RunOutcome::Rejected(
@@ -210,6 +213,7 @@ impl ExecutedRun {
         setup: &SyncSetup<'_>,
         remote: &mut dyn Remote,
         db: &mut StateDb,
+        hashes: &mut HashCache,
     ) -> Result<RunOutcome, StateError> {
         // If the server cannot be listed now (it went offline during the
         // run), its last listing with what this run did to it stands in:
@@ -222,7 +226,7 @@ impl ExecutedRun {
             .list()
             .map(|r| r.files)
             .unwrap_or_else(|_| predicted_remote(&self.remote_before, &self.executed));
-        let committed = match scan(setup.disk.root(), self.now) {
+        let committed = match scan_with(setup.disk.root(), self.now, hashes) {
             Ok(l) => {
                 let after = States {
                     local: l.files,

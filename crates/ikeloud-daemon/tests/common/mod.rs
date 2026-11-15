@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 use ikeloud_daemon::{
     Download, Listing, Remote, RemoteError, RunOutcome, RunReport, SyncSetup, Written, sync_once,
 };
-use ikeloud_local::LocalDisk;
+use ikeloud_local::{HashCache, LocalDisk};
 use ikeloud_safety::{
     Action, ApprovedAction, DEFAULT_SETTLE_TIME, Etag, MassChangeConfirmation, RelPath,
 };
@@ -314,7 +314,15 @@ impl Fixture {
         };
         // A minute from now: every file the test wrote counts as settled.
         let now = SystemTime::now() + Duration::from_secs(60);
-        sync_once(&setup, &mut self.icloud, &mut self.db, confirmation, now).expect("state db")
+        sync_once(
+            &setup,
+            &mut self.icloud,
+            &mut self.db,
+            &mut HashCache::default(),
+            confirmation,
+            now,
+        )
+        .expect("state db")
     }
 
     pub fn run(&mut self) -> RunReport {
