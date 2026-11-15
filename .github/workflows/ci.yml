@@ -67,5 +67,11 @@ jobs:
       - name: cargo audit
         run: cargo audit
 
-      - name: cargo vet
-        run: cargo vet --locked
+      # Nevěříme nikomu (docs/rozhodnuti/0007): žádné cizí audity ani autoři.
+      - name: cargo vet bez cizí důvěry
+        run: |
+          if grep -nE '^\[(imports|trusted)' supply-chain/config.toml supply-chain/audits.toml; then
+            echo "chyba: supply-chain obsahuje importy nebo důvěryhodné autory" >&2
+            exit 1
+          fi
+          cargo vet --locked

@@ -4,15 +4,6 @@
 [cargo-vet]
 version = "0.10"
 
-[imports.bytecode-alliance]
-url = "https://raw.githubusercontent.com/bytecodealliance/wasmtime/main/supply-chain/audits.toml"
-
-[imports.google]
-url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
-
-[imports.mozilla]
-url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
-
 [[exemptions.autocfg]]
 version = "1.5.1"
 criteria = "safe-to-deploy"
@@ -33,6 +24,10 @@ version = "0.5.4"
 criteria = "safe-to-deploy"
 notes = "Přihlášení SRP (ikeloud-api/src/srp.rs), 2026-11-15. Kryptografie RustCrypto / num-bigint a jejich závislosti; vlastní audit nebo důvěra autorovi čeká na rozhodnutí (docs/rozhodnuti/0005)."
 
+[[exemptions.cpufeatures]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.crypto-common]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
@@ -52,8 +47,16 @@ notes = "Přihlášení SRP (ikeloud-api/src/srp.rs), 2026-11-15. Kryptografie R
 version = "0.2.7"
 criteria = "safe-to-deploy"
 
+[[exemptions.fluent-bundle]]
+version = "0.16.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.fluent-langneg]]
 version = "0.13.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.fluent-syntax]]
+version = "0.12.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.getrandom]]
@@ -70,6 +73,14 @@ notes = "Přihlášení SRP (ikeloud-api/src/srp.rs), 2026-11-15. Kryptografie R
 version = "0.4.15"
 criteria = "safe-to-deploy"
 notes = "Přihlášení SRP (ikeloud-api/src/srp.rs), 2026-11-15. Kryptografie RustCrypto / num-bigint a jejich závislosti; vlastní audit nebo důvěra autorovi čeká na rozhodnutí (docs/rozhodnuti/0005)."
+
+[[exemptions.intl-memoizer]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.intl_pluralrules]]
+version = "7.0.2"
+criteria = "safe-to-deploy"
 
 [[exemptions.libc]]
 version = "0.2.191"
@@ -90,6 +101,10 @@ version = "0.1.47"
 criteria = "safe-to-deploy"
 notes = "Přihlášení SRP (ikeloud-api/src/srp.rs), 2026-11-15. Kryptografie RustCrypto / num-bigint a jejich závislosti; vlastní audit nebo důvěra autorovi čeká na rozhodnutí (docs/rozhodnuti/0005)."
 
+[[exemptions.num-traits]]
+version = "0.2.19"
+criteria = "safe-to-deploy"
+
 [[exemptions.pbkdf2]]
 version = "0.13.0"
 criteria = "safe-to-deploy"
@@ -97,6 +112,10 @@ notes = "Přihlášení SRP (ikeloud-api/src/srp.rs), 2026-11-15. Kryptografie R
 
 [[exemptions.proc-macro2]]
 version = "1.0.107"
+criteria = "safe-to-deploy"
+
+[[exemptions.quote]]
+version = "1.0.47"
 criteria = "safe-to-deploy"
 
 [[exemptions.r-efi]]
@@ -149,6 +168,10 @@ criteria = "safe-to-deploy"
 version = "0.8.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.tinyvec]]
+version = "1.13.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.type-map]]
 version = "0.5.1"
 criteria = "safe-to-deploy"
@@ -158,8 +181,28 @@ version = "1.20.1"
 criteria = "safe-to-deploy"
 notes = "Přihlášení SRP (ikeloud-api/src/srp.rs), 2026-11-15. Kryptografie RustCrypto / num-bigint a jejich závislosti; vlastní audit nebo důvěra autorovi čeká na rozhodnutí (docs/rozhodnuti/0005)."
 
+[[exemptions.unic-langid]]
+version = "0.9.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.unic-langid-impl]]
+version = "0.9.6"
+criteria = "safe-to-deploy"
+
 [[exemptions.unicode-ident]]
 version = "1.0.27"
+criteria = "safe-to-deploy"
+
+[[exemptions.unicode-normalization]]
+version = "0.1.25"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasip2]]
+version = "1.0.4+wasi-0.2.12"
+criteria = "safe-to-deploy"
+
+[[exemptions.wit-bindgen]]
+version = "0.57.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerofrom]]
