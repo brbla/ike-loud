@@ -57,4 +57,5 @@ cd "$ROOT/tla"
 SPEC="$(sed -n 's/^\\\* SPEC: *\([A-Za-z0-9_]*\.tla\).*/\1/p' "$CFG" | head -n1)"
 SPEC="${SPEC:-Sync.tla}"
 exec "$JAVA" -XX:+UseParallelGC -cp "$JAR" tlc2.TLC \
-    -config "$CFG" -workers auto -deadlock -cleanup "$@" "$SPEC"
+    -config "$CFG" -workers auto -deadlock \
+    -metadir "$TOOLS/states/$(basename "$CFG" .cfg)-$$" "$@" "$SPEC"
