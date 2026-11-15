@@ -7,5 +7,7 @@
 # every input of this run) matches a run that already passed.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# src/proofs.rs is compiled only for Kani; its mutants could never be caught.
 exec cargo mutants --package ikeloud-safety --test-package ikeloud-safety \
+    --exclude crates/ikeloud-safety/src/proofs.rs \
     --jobs "${MUTANTS_JOBS:-4}" --no-shuffle "$@"

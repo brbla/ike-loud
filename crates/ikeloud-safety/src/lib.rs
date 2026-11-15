@@ -14,6 +14,8 @@ pub mod action;
 pub mod assessment;
 pub mod context;
 pub mod names;
+#[cfg(kani)]
+mod proofs;
 
 pub use action::{Action, Change, ChangeKind, ContentHash, Etag, LocalId, LocalVersion, RelPath};
 pub use assessment::{

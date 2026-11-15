@@ -66,7 +66,7 @@ patří do démona: proces bez core dumpů (`PR_SET_DUMPABLE`), milník 1.
   (`scripts/kani.sh`, modul `proofs` v `crates/ikeloud-safety/src/context.rs`):
   - výchozí limity brzdy: do 10 smazaných souborů nikdy nebrzdí, nad 50 vždy,
     pro jakýkoli počet synchronizovaných souborů (0,1 s);
-  - víc změn brzdu nikdy nevypne, pro všechny hodnoty `u64` a podíl do 100 %
+  - víc změn brzdu nikdy nevypne, pro všechny hodnoty `u64` včetně limitů
     (108 s).
 
   Třetí vlastnost („víc synchronizovaných souborů brzdu nezapne“) solver
