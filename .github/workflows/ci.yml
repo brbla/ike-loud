@@ -10,20 +10,44 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
   RUSTFLAGS: -D warnings
   # CI tools are pinned exactly; update deliberately, one per change.
   CARGO_DENY_VERSION: 0.20.2
   CARGO_AUDIT_VERSION: 0.22.2
   CARGO_VET_VERSION: 0.10.2
 
+# Caching (docs/rozhodnuti/0008):
+# - Only things that did not change are cached: compiled third-party
+#   dependencies from vendor/ and pinned tools. Every cache key contains
+#   everything the cached content depends on, so any change makes a new key.
+# - Our own crates are never taken from the cache: their artifacts are
+#   removed after restoring and before saving (scripts/ci-clean-workspace.sh).
+# - Exact keys only (no restore-keys), so an older cache is never reused.
+# - Test and model-checking results are never cached.
+# Actions are pinned to commit SHAs.
+
 jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Toolchain from rust-toolchain.toml
-        run: rustup toolchain install
+        id: toolchain
+        run: |
+          rustup toolchain install
+          echo "rustc=$(rustc -V | tr ' ' '_')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore compiled dependencies
+        id: deps
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: deps-v1-${{ runner.os }}-${{ steps.toolchain.outputs.rustc }}-${{ env.RUSTFLAGS }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.cargo/config.toml', 'rust-toolchain.toml', 'vendor/**/.cargo-checksum.json') }}
+
+      - name: Drop our own crates from the cache
+        run: scripts/ci-clean-workspace.sh
 
       - name: Format
         run: cargo fmt --all --check
@@ -37,10 +61,31 @@ jobs:
       - name: Dependency rules
         run: python3 scripts/check-deps.py
 
+      - name: Keep only dependencies for the cache
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: scripts/ci-clean-workspace.sh
+
+      - name: Save compiled dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+
   tla:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Java and tla2tools; versions and checksums live in scripts/tlc.sh,
+      # which also verifies the jar on every run.
+      - name: Cache Java and TLC
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .tools/jre-*
+            .tools/tla2tools-*.jar
+          key: tla-tools-v1-${{ runner.os }}-${{ hashFiles('scripts/tlc.sh') }}
 
       - name: TLA+ sync model (server enforces etag)
         run: scripts/tlc.sh SyncEtag.cfg
@@ -51,15 +96,38 @@ jobs:
   supply-chain:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Outside the repository: inside it .cargo/config.toml redirects crates.io to vendor/.
+      # The tools are built with the runner's default Rust outside the
+      # repository (inside it .cargo/config.toml redirects crates.io to vendor/).
+      - name: Rust version for the tool cache
+        id: rust
+        working-directory: ${{ runner.temp }}
+        run: echo "rustc=$(rustc -V | tr ' ' '_')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cargo-deny, cargo-audit and cargo-vet
+        id: tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/cargo-deny
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/bin/cargo-vet
+          key: supply-chain-tools-v1-${{ runner.os }}-${{ steps.rust.outputs.rustc }}-deny${{ env.CARGO_DENY_VERSION }}-audit${{ env.CARGO_AUDIT_VERSION }}-vet${{ env.CARGO_VET_VERSION }}
+
       - name: Install cargo-deny, cargo-audit and cargo-vet
+        if: steps.tools.outputs.cache-hit != 'true'
         working-directory: ${{ runner.temp }}
         run: |
           cargo install --locked cargo-deny --version "$CARGO_DENY_VERSION"
           cargo install --locked cargo-audit --version "$CARGO_AUDIT_VERSION"
           cargo install --locked cargo-vet --version "$CARGO_VET_VERSION"
+
+      - name: Tool versions match the pins
+        run: |
+          cargo deny --version | grep -qF "$CARGO_DENY_VERSION"
+          cargo audit --version | grep -qF "$CARGO_AUDIT_VERSION"
+          cargo vet --version | grep -qF "$CARGO_VET_VERSION"
 
       - name: cargo deny
         run: cargo deny check
