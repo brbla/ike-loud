@@ -21,8 +21,8 @@ fn log(time: u64, kind: JournalKind, path: &str, target: Option<&str>) -> Journa
     JournalEntry {
         time,
         kind,
-        path: RelPath::new(path),
-        target: target.map(RelPath::new),
+        path: RelPath::parse(path).expect("well-formed path"),
+        target: target.map(|t| RelPath::parse(t).expect("well-formed path")),
     }
 }
 
@@ -120,7 +120,7 @@ fn common_state_changes() {
         (
             "a local move pending: local path and identity round-trip",
             vec![vec![BaseChange::Set(BaseEntry {
-                local_path: RelPath::new("moved"),
+                local_path: RelPath::parse("moved").expect("well-formed path"),
                 local: Some(ikeloud_safety::LocalId {
                     device: u64::MAX,
                     inode: 3,
@@ -129,7 +129,7 @@ fn common_state_changes() {
                 ..entry("a", 1, "d1", "h", "e")
             })]],
             vec![BaseEntry {
-                local_path: RelPath::new("moved"),
+                local_path: RelPath::parse("moved").expect("well-formed path"),
                 local: Some(ikeloud_safety::LocalId {
                     device: u64::MAX,
                     inode: 3,
@@ -175,7 +175,7 @@ fn common_state_changes() {
 fn inconsistent_commits_fail_whole() {
     // (name, change that must fail on top of entries a/d1/1 and b/d2/2, error)
     let taken = |s: &str| StateError::NameTaken {
-        path: RelPath::new(s),
+        path: RelPath::parse(s).expect("well-formed path"),
     };
     let invalid = |field| StateError::InvalidValue { field };
     let cases: Vec<(&str, Vec<BaseChange>, StateError)> = vec![
@@ -203,7 +203,7 @@ fn inconsistent_commits_fail_whole() {
             "another document takes a taken local file",
             vec![set("c", 1, "d3", "h", "e")],
             StateError::LocalFileTaken {
-                path: RelPath::new("c"),
+                path: RelPath::parse("c").expect("well-formed path"),
             },
         ),
         (
@@ -245,11 +245,15 @@ fn lookup_of_one_entry() {
     db.commit(&[set("Docs/Report.odt", 1, "d1", "h", "e")], &[])
         .expect("commit");
     assert_eq!(
-        db.base_entry(&RelPath::new("docs/report.odt"))
+        db.base_entry(&RelPath::parse("docs/report.odt").expect("well-formed path"))
             .expect("read"),
         Some(entry("Docs/Report.odt", 1, "d1", "h", "e"))
     );
-    assert_eq!(db.base_entry(&RelPath::new("missing")).expect("read"), None);
+    assert_eq!(
+        db.base_entry(&RelPath::parse("missing").expect("well-formed path"))
+            .expect("read"),
+        None
+    );
 }
 
 #[test]

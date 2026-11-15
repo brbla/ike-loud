@@ -105,7 +105,7 @@ impl StateDb {
             .prepare(&format!("SELECT {BASE_COLUMNS} FROM base ORDER BY key"))
             .map_err(sql)?;
         let rows = stmt.query_map([], base_row).map_err(sql)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(sql)
+        rows.map(|row| row.map_err(sql)?).collect()
     }
 
     /// The common-state entry of one file, matched by normalized name.
@@ -117,7 +117,8 @@ impl StateDb {
                 base_row,
             )
             .optional()
-            .map_err(sql)
+            .map_err(sql)?
+            .transpose()
     }
 
     /// Applies changes of the common state and appends journal entries in
@@ -212,8 +213,8 @@ impl StateDb {
             entries.push(JournalEntry {
                 time,
                 kind,
-                path: RelPath::new(path),
-                target: target.map(RelPath::new),
+                path: stored_path("journal", path)?,
+                target: target.map(|t| stored_path("journal", t)).transpose()?,
             });
         }
         Ok(entries)
@@ -272,7 +273,17 @@ fn check_entry(tx: &rusqlite::Transaction<'_>, e: &BaseEntry) -> Result<(), Stat
 /// Columns of a common-state entry, in the order `base_row` reads them.
 const BASE_COLUMNS: &str = "path, local_path, device, inode, birth_ns, doc_id, hash, etag";
 
-fn base_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BaseEntry> {
+/// A path read back from the database; malformed text is a corrupt row.
+fn stored_path(table: &'static str, text: String) -> Result<RelPath, StateError> {
+    RelPath::parse(text.as_str()).map_err(|e| StateError::CorruptRow {
+        table,
+        detail: format!("malformed path {text:?}: {e:?}"),
+    })
+}
+
+/// One row of `base`: an SQL error, or the entry (itself an error when the
+/// stored values are not valid).
+fn base_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<BaseEntry, StateError>> {
     let device: Option<i64> = r.get(2)?;
     let inode: Option<i64> = r.get(3)?;
     let birth_ns: Option<i64> = r.get(4)?;
@@ -282,14 +293,18 @@ fn base_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BaseEntry> {
         inode: u64_from_sql(inode),
         birth_ns,
     });
-    Ok(BaseEntry {
-        path: RelPath::new(r.get::<_, String>(0)?),
-        local_path: RelPath::new(r.get::<_, String>(1)?),
-        local,
-        doc_id: DocId::new(r.get::<_, String>(5)?),
-        hash: ContentHash::new(r.get::<_, String>(6)?),
-        etag: Etag::new(r.get::<_, String>(7)?),
-    })
+    let (path, local_path): (String, String) = (r.get(0)?, r.get(1)?);
+    let (doc_id, hash, etag): (String, String, String) = (r.get(5)?, r.get(6)?, r.get(7)?);
+    Ok(stored_path("base", path).and_then(|path| {
+        Ok(BaseEntry {
+            path,
+            local_path: stored_path("base", local_path)?,
+            local,
+            doc_id: DocId::new(doc_id),
+            hash: ContentHash::new(hash),
+            etag: Etag::new(etag),
+        })
+    }))
 }
 
 /// SQLite integers are signed; device and inode numbers are stored bit for bit.
@@ -335,6 +350,35 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("read");
         assert_eq!(v, 99, "the file was not migrated");
+    }
+
+    #[test]
+    fn malformed_stored_paths_are_reported() {
+        let db = StateDb::open_in_memory().expect("open");
+        db.conn
+            .execute(
+                "INSERT INTO base (doc_id, key, path, local_path, hash, etag)
+                 VALUES ('d', '../x', '../x', '../x', 'h', 'e')",
+                [],
+            )
+            .expect("insert");
+        db.conn
+            .execute(
+                "INSERT INTO journal (time, kind, path) VALUES (1, 'uploaded', 'a//b')",
+                [],
+            )
+            .expect("insert");
+        assert!(matches!(
+            db.base(),
+            Err(StateError::CorruptRow { table: "base", .. })
+        ));
+        assert!(matches!(
+            db.journal(10),
+            Err(StateError::CorruptRow {
+                table: "journal",
+                ..
+            })
+        ));
     }
 
     #[test]

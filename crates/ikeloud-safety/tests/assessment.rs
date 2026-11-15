@@ -16,7 +16,7 @@ use ikeloud_safety::{
 // --- helpers -----------------------------------------------------------------
 
 fn p(s: &str) -> RelPath {
-    RelPath::new(s)
+    RelPath::parse(s).expect("well-formed path")
 }
 
 fn e(s: &str) -> Etag {
@@ -671,24 +671,11 @@ fn invalid_names() {
             ok(1),
         ),
         (
-            "empty component",
-            "a//b".into(),
-            err(NameError::EmptyComponent),
-        ),
-        ("leading slash", "/a".into(), err(NameError::EmptyComponent)),
-        (
-            "trailing slash",
-            "a/".into(),
-            err(NameError::EmptyComponent),
-        ),
-        ("dot", "a/./b".into(), err(NameError::DotOrDotDot)),
-        ("two dots", "../b".into(), err(NameError::DotOrDotDot)),
-        (
             "newline",
             "a\nb".into(),
             err(NameError::ForbiddenChar('\n')),
         ),
-        ("NUL", "a\0b".into(), err(NameError::ForbiddenChar('\0'))),
+        ("tab", "a\tb".into(), err(NameError::ForbiddenChar('\t'))),
         ("255 bytes", exactly_255, ok(1)),
         ("256 bytes", too_long, err(NameError::TooLong)),
         (
@@ -704,14 +691,6 @@ fn invalid_names() {
             "{name}"
         );
     }
-}
-
-#[test]
-fn empty_path() {
-    assert_eq!(
-        run(vec![upload("", None)], &context(0)),
-        deferred(0, vec![DeferReason::InvalidName(NameError::EmptyComponent)])
-    );
 }
 
 #[test]

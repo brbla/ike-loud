@@ -10,18 +10,15 @@ impl Translations {
     /// `date` looks like `2026-11-15`, `number` starts at 1 (higher when the
     /// name is taken). A slash coming from a translation is replaced by
     /// a hyphen so the copy stays in the same folder.
-    pub fn conflict_copy_name(&self, path: &RelPath, date: &str, number: u32) -> RelPath {
+    /// `None` if the translation gives no usable name (empty, `.`, `..`).
+    pub fn conflict_copy_name(&self, path: &RelPath, date: &str, number: u32) -> Option<RelPath> {
         let (stem, extension) = split_extension(path.name());
         let message = Message::new("conflict-copy-name")
             .arg("stem", Value::Text(stem.to_string()))
             .arg("extension", Value::Text(extension.to_string()))
             .arg("date", Value::Text(date.to_string()))
             .arg("number", Value::Number(u64::from(number)));
-        let name = self.text(&message).replace('/', "-");
-        match path.parent() {
-            "" => RelPath::new(name),
-            parent => RelPath::new(format!("{parent}/{name}")),
-        }
+        path.sibling(&self.text(&message).replace('/', "-"))
     }
 }
 

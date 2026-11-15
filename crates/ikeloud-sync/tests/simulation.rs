@@ -247,7 +247,7 @@ impl World {
                 .local
                 .iter()
                 .map(|(p, f)| LocalFile {
-                    path: RelPath::new(p.as_str()),
+                    path: RelPath::parse(p.as_str()).expect("well-formed path"),
                     id: Self::id(f),
                     hash: ContentHash::new(f.content.to_string()),
                     size: 1,
@@ -262,7 +262,7 @@ impl World {
                 .remote
                 .iter()
                 .map(|(p, f)| RemoteFile {
-                    path: RelPath::new(p.as_str()),
+                    path: RelPath::parse(p.as_str()).expect("well-formed path"),
                     doc_id: DocId::new(f.doc.to_string()),
                     etag: Etag::new(f.etag.to_string()),
                     size: 1,
@@ -431,7 +431,12 @@ impl World {
         context.remote_etags = self
             .remote
             .iter()
-            .map(|(p, f)| (RelPath::new(p.as_str()), Etag::new(f.etag.to_string())))
+            .map(|(p, f)| {
+                (
+                    RelPath::parse(p.as_str()).expect("well-formed path"),
+                    Etag::new(f.etag.to_string()),
+                )
+            })
             .collect();
         let decision = match assess(plan.actions.clone(), &context) {
             Err(Rejection::MassChangeNeedsConfirmation(summary)) => {
@@ -703,8 +708,8 @@ impl World {
     }
 }
 
-fn copy_name(p: &RelPath, n: u32) -> RelPath {
-    RelPath::new(format!("{} (conflict {n})", p.as_str()))
+fn copy_name(p: &RelPath, n: u32) -> Option<RelPath> {
+    RelPath::parse(format!("{} (conflict {n})", p.as_str())).ok()
 }
 
 fn transfer(doc: u64, etag: u64, l: &LFile) -> Transfer {

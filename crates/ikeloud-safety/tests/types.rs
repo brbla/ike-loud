@@ -5,7 +5,7 @@
 #![allow(clippy::expect_used, clippy::panic)] // test code may panic
 
 use ikeloud_safety::{
-    Action, Change, ChangeKind, ContentHash, Etag, LocalId, LocalVersion, RelPath,
+    Action, Change, ChangeKind, ContentHash, Etag, LocalId, LocalVersion, PathError, RelPath,
 };
 
 #[test]
@@ -18,7 +18,7 @@ fn relative_paths() {
         ("Příloha/smlouva.pdf", "Příloha", "smlouva.pdf"),
     ];
     for (path, parent, name) in cases {
-        let p = RelPath::new(*path);
+        let p = RelPath::parse(*path).expect("well-formed path");
         assert_eq!(p.parent(), *parent, "{path}: parent");
         assert_eq!(p.name(), *name, "{path}: name");
         assert_eq!(p.as_str(), *path, "{path}: text");
@@ -79,7 +79,7 @@ fn local_identity() {
 
 #[test]
 fn what_an_action_changes() {
-    let p = |s: &str| RelPath::new(s);
+    let p = |s: &str| RelPath::parse(s).expect("well-formed path");
     let version = LocalVersion {
         id: LocalId {
             device: 1,
@@ -182,4 +182,43 @@ fn the_brake_window_is_one_day() {
         ikeloud_safety::BRAKE_WINDOW,
         std::time::Duration::from_secs(86_400)
     );
+}
+
+#[test]
+fn only_well_formed_paths_exist() {
+    let cases: &[(&str, Result<(), PathError>)] = &[
+        ("a", Ok(())),
+        ("a/b/c.txt", Ok(())),
+        ("a\nb", Ok(())), // a strange but possible local name; the server rules are separate
+        ("..a", Ok(())),
+        ("", Err(PathError::EmptyComponent)),
+        ("/a", Err(PathError::EmptyComponent)),
+        ("a/", Err(PathError::EmptyComponent)),
+        ("a//b", Err(PathError::EmptyComponent)),
+        (".", Err(PathError::DotOrDotDot)),
+        ("..", Err(PathError::DotOrDotDot)),
+        ("a/../../etc/passwd", Err(PathError::DotOrDotDot)),
+        ("a/./b", Err(PathError::DotOrDotDot)),
+        ("a\0b", Err(PathError::Nul)),
+    ];
+    for (text, expected) in cases {
+        assert_eq!(RelPath::parse(*text).map(|_| ()), *expected, "{text:?}");
+    }
+}
+
+#[test]
+fn paths_built_from_paths() {
+    let p = |s: &str| RelPath::parse(s).expect("well-formed path");
+    assert_eq!(p("d/a.txt").sibling("b.txt"), Some(p("d/b.txt")));
+    assert_eq!(p("a.txt").sibling("b.txt"), Some(p("b.txt")));
+    for bad in ["", ".", "..", "x/y", "a\0"] {
+        assert_eq!(p("d/a.txt").sibling(bad), None, "{bad:?}");
+    }
+    assert_eq!(
+        p("a/b/c.txt").ancestors().collect::<Vec<_>>(),
+        vec![p("a"), p("a/b")]
+    );
+    assert_eq!(p("c.txt").ancestors().count(), 0);
+    assert_eq!(p("a/b").map(str::to_uppercase), Some(p("A/B")));
+    assert_eq!(p("a/b").map(|_| "../x".into()), None);
 }

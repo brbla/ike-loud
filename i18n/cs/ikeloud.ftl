@@ -59,8 +59,6 @@ deferred-still-being-written = Soubor se ještě ukládá. Nahraje se, až bude 
 deferred-ignored = Dočasný soubor programu; na iCloud se nenahrává.
 deferred-case-collision =
     Na iCloudu už je „{ $name }“. iCloud nerozlišuje velká a malá písmena, proto soubor přejmenujte.
-deferred-name-empty = Název souboru nebo složky je prázdný. Soubor přejmenujte.
-deferred-name-dot = Název „.“ ani „..“ iCloud nepřijme. Soubor přejmenujte.
 deferred-name-char = Název obsahuje znak, který iCloud nepřijme. Soubor přejmenujte.
 deferred-name-too-long = Název je pro iCloud příliš dlouhý. Soubor přejmenujte.
 

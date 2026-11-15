@@ -5,14 +5,14 @@
 //! engine's comparison is passed in [`crate::Context::name_key`], so there
 //! is one definition of "the same name" (`ikeloud_sync::names::key`).
 
-/// Why a name cannot be uploaded to the server.
+use crate::action::RelPath;
+
+/// Why a name cannot be uploaded to the server. (Whether a path is well
+/// formed at all is decided when it is made: [`RelPath::parse`].)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NameError {
-    /// Empty path or empty path component (`a//b`, `/a`).
-    EmptyComponent,
-    /// A path component is `.` or `..`.
-    DotOrDotDot,
-    /// The name contains a character iCloud does not accept (NUL, control).
+    /// The name contains a character iCloud does not accept (a control
+    /// character such as a newline).
     ForbiddenChar(char),
     /// A path component is longer than 255 bytes.
     TooLong,
@@ -25,28 +25,14 @@ pub const MAX_NAME_LEN: usize = 255;
 ///
 /// The rules are deliberately strict. The exact server rules are found in
 /// milestone 0 and added here with tests.
-pub fn validate_path(path: &str) -> Result<(), NameError> {
-    if path.is_empty() {
-        return Err(NameError::EmptyComponent);
-    }
-    for component in path.split('/') {
-        validate_name(component)?;
-    }
-    Ok(())
-}
-
-fn validate_name(name: &str) -> Result<(), NameError> {
-    if name.is_empty() {
-        return Err(NameError::EmptyComponent);
-    }
-    if name == "." || name == ".." {
-        return Err(NameError::DotOrDotDot);
-    }
-    if name.len() > MAX_NAME_LEN {
-        return Err(NameError::TooLong);
-    }
-    if let Some(c) = name.chars().find(|c| c.is_control()) {
-        return Err(NameError::ForbiddenChar(c));
+pub fn validate_path(path: &RelPath) -> Result<(), NameError> {
+    for name in path.as_str().split('/') {
+        if name.len() > MAX_NAME_LEN {
+            return Err(NameError::TooLong);
+        }
+        if let Some(c) = name.chars().find(|c| c.is_control()) {
+            return Err(NameError::ForbiddenChar(c));
+        }
     }
     Ok(())
 }

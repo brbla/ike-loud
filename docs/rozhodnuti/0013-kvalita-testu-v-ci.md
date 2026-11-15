@@ -63,6 +63,14 @@ a spouští jen při změně bezpečnostní vrstvy. Mutace soubor s důkazy
 vynechávají: v běžném buildu se nepřekládá, a jeho mutanty by proto nešlo
 chytit.
 
+**`RelPath` je vždy platná cesta.** Jediný způsob, jak ji vytvořit, je
+`RelPath::parse`. Ta odmítne prázdnou cestu, prázdnou část (`a//b`, `/a`),
+`.` a `..` (cesta tedy nikdy nevede ven ze synchronizované složky) a znak
+NUL. Cesty přečtené z databáze se kontrolují znovu a vadná je poškozený
+záznam. Překlad, ze kterého by vznikl neplatný název konfliktní kopie, se
+neuplatní. `names::validate_path` už kontroluje jen pravidla serveru
+(délku a řídicí znaky); struktura cesty je na jednom místě.
+
 ## Vědomě ne (schválil uživatel 2026-11-15)
 
 **proptest.** Zadání chce property-based testy s náhodnými sekvencemi změn
@@ -85,8 +93,5 @@ patří do démona: proces bez core dumpů (`PR_SET_DUMPABLE`), milník 1.
 - **`cargo vet` má 60 výjimek a žádný audit.** Projde, ale nic tím
   neověřuje. Audity musí udělat člověk; seznam výjimek je dluh, který se
   bude splácet od nejmenších crate.
-- **`RelPath` nekontroluje platnost** při vytvoření. Kontrolují ji
-  `ikeloud-safety` (`names::validate_path`) a budoucí skener, ale typ sám to
-  nezaručuje.
 - **TLA+ modely** nepokrývají NFC, uložení novým souborem, identitu
   s časem vzniku ani brzdu. Tyto věci zatím pokrývá jen simulace.

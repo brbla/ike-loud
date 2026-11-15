@@ -5,14 +5,67 @@ use std::time::Duration;
 
 /// Relative path inside the synced folder, components separated by `/`.
 ///
-/// Name validity is checked by [`crate::names`]; this type only carries it.
+/// Always well-formed: not empty, no empty component (`a//b`, `/a`, `a/`),
+/// no `.` or `..` (so it can never point outside the synced folder), no NUL.
+/// Whether the server accepts the name (length, characters) is a separate
+/// question, answered by [`crate::names::validate_path`]: a local file with
+/// such a name exists and must still be reported.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RelPath(String);
 
+/// Why text is not a well-formed relative path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathError {
+    /// Empty text, or an empty component (`a//b`, `/a`, `a/`).
+    EmptyComponent,
+    /// A component is `.` or `..`.
+    DotOrDotDot,
+    /// The text contains a NUL character.
+    Nul,
+}
+
 impl RelPath {
-    /// Creates a path from the text the engine produced.
-    pub fn new(path: impl Into<String>) -> Self {
-        Self(path.into())
+    /// Checks and creates a path. The only way to make one.
+    pub fn parse(path: impl Into<String>) -> Result<Self, PathError> {
+        let path = path.into();
+        if path.contains('\0') {
+            return Err(PathError::Nul);
+        }
+        for component in path.split('/') {
+            match component {
+                "" => return Err(PathError::EmptyComponent),
+                "." | ".." => return Err(PathError::DotOrDotDot),
+                _ => {}
+            }
+        }
+        Ok(Self(path))
+    }
+
+    /// The same file name in another form (e.g. Unicode normalized).
+    /// `None` if the new text is not a well-formed path.
+    pub fn map(&self, f: impl FnOnce(&str) -> String) -> Option<Self> {
+        Self::parse(f(&self.0)).ok()
+    }
+
+    /// A file named `name` in the same folder. `None` if `name` is not a
+    /// single well-formed component (contains `/`, is empty, `.` or `..`).
+    pub fn sibling(&self, name: &str) -> Option<Self> {
+        if name.contains('/') {
+            return None;
+        }
+        match self.parent() {
+            "" => Self::parse(name),
+            parent => Self::parse(format!("{parent}/{name}")),
+        }
+        .ok()
+    }
+
+    /// Parent folders, from the root: `a/b/c.txt` → `a`, `a/b`.
+    pub fn ancestors(&self) -> impl Iterator<Item = RelPath> + '_ {
+        self.0
+            .match_indices('/')
+            .filter_map(|(i, _)| self.0.get(..i))
+            .map(|prefix| Self(prefix.to_owned()))
     }
 
     /// The path as text.

@@ -16,7 +16,7 @@ use ikeloud_testkit::{LOCAL_SIZE, REMOTE_SIZE, STABLE, base, id, local, p, remot
 // --- helpers -----------------------------------------------------------------
 
 /// Copy name following the spec's pattern, with a fixed date.
-fn copy_name(path: &RelPath, n: u32) -> RelPath {
+fn copy_name(path: &RelPath, n: u32) -> Option<RelPath> {
     let (stem, ext) = match path.as_str().rsplit_once('.') {
         Some((s, e)) if !s.ends_with('/') && !s.is_empty() => (s, format!(".{e}")),
         _ => (path.as_str(), String::new()),
@@ -26,11 +26,14 @@ fn copy_name(path: &RelPath, n: u32) -> RelPath {
     } else {
         format!(" {n}")
     };
-    RelPath::new(format!("{stem} (Linux conflict 2026-11-15{number}){ext}"))
+    RelPath::parse(format!("{stem} (Linux conflict 2026-11-15{number}){ext}")).ok()
 }
 
 fn copy(path: &str) -> String {
-    copy_name(&p(path), 1).as_str().to_string()
+    copy_name(&p(path), 1)
+        .expect("a copy name")
+        .as_str()
+        .to_string()
 }
 
 /// Applies the local actions of a plan to the scanned local files and checks
@@ -83,7 +86,7 @@ fn plan(states: &States) -> Plan {
     plan_with(states, &copy_name)
 }
 
-fn plan_with(states: &States, name: &dyn Fn(&RelPath, u32) -> RelPath) -> Plan {
+fn plan_with(states: &States, name: &dyn Fn(&RelPath, u32) -> Option<RelPath>) -> Plan {
     let result = build_plan(states, DEFAULT_SETTLE_TIME, name);
     replay_local(states, &result);
     result
@@ -513,7 +516,7 @@ fn a_translation_without_the_number_cannot_hang_the_planner() {
         ],
         ..States::default()
     };
-    let constant = |_: &RelPath, _: u32| p("copy");
+    let constant = |_: &RelPath, _: u32| Some(p("copy"));
     let result = plan_with(&states, &constant);
     assert_eq!(
         result.actions,
@@ -534,10 +537,11 @@ fn copy_names_that_would_not_sync_are_refused() {
         base: vec![base("d/a", 1, "d1", "h1", "e1")],
         ..States::default()
     };
-    type Naming = dyn Fn(&RelPath, u32) -> RelPath;
+    type Naming = dyn Fn(&RelPath, u32) -> Option<RelPath>;
     let cases: Vec<(&str, &Naming)> = vec![
-        ("an ignored name", &|_, n| p(&format!("d/a {n}.part"))),
-        ("another folder", &|_, n| p(&format!("e/a {n}"))),
+        ("an ignored name", &|_, n| Some(p(&format!("d/a {n}.part")))),
+        ("another folder", &|_, n| Some(p(&format!("e/a {n}")))),
+        ("no usable name at all", &|_, _| None),
     ];
     for (name, naming) in cases {
         let result = plan_with(&states, naming);

@@ -56,8 +56,6 @@ deferred-still-being-written = The file is still being saved. It will be uploade
 deferred-ignored = Temporary program file; it is not uploaded to iCloud.
 deferred-case-collision =
     iCloud already has “{ $name }”. iCloud does not distinguish upper and lower case, so please rename the file.
-deferred-name-empty = The file or folder name is empty. Please rename the file.
-deferred-name-dot = iCloud does not accept the name “.” or “..”. Please rename the file.
 deferred-name-char = The name contains a character iCloud does not accept. Please rename the file.
 deferred-name-too-long = The name is too long for iCloud. Please rename the file.
 

@@ -33,7 +33,7 @@ fn all_messages() -> Vec<Message> {
     let Err(mass) = assess(
         (0..120)
             .map(|i| Action::TrashLocal {
-                path: RelPath::new(format!("f{i}")),
+                path: RelPath::parse(format!("f{i}")).expect("well-formed path"),
                 expected: ikeloud_testkit::version(i, "h"),
             })
             .collect(),
@@ -53,7 +53,7 @@ fn all_messages() -> Vec<Message> {
         Message::new("app-description"),
         Rejection::LocalFolderUnavailable.message(),
         Rejection::SuspiciousRemoteListing.message(),
-        Rejection::Conflict(vec![RelPath::new("a")]).message(),
+        Rejection::Conflict(vec![RelPath::parse("a").expect("well-formed path")]).message(),
         mass.message(),
         Rejection::NotEnoughICloudSpace {
             needed: 2_000_000,
@@ -68,16 +68,11 @@ fn all_messages() -> Vec<Message> {
         DeferReason::StillBeingWritten.message(),
         DeferReason::Ignored.message(),
         DeferReason::CaseCollision {
-            with: RelPath::new("a/Photo.jpg"),
+            with: RelPath::parse("a/Photo.jpg").expect("well-formed path"),
         }
         .message(),
     ];
-    for error in [
-        NameError::EmptyComponent,
-        NameError::DotOrDotDot,
-        NameError::ForbiddenChar('\n'),
-        NameError::TooLong,
-    ] {
+    for error in [NameError::ForbiddenChar('\n'), NameError::TooLong] {
         messages.push(DeferReason::InvalidName(error).message());
     }
     for r in read_only {
@@ -147,7 +142,9 @@ fn every_message_is_translated() {
 fn czech_plural_forms() {
     let cs = lang("cs");
     let conflict = |n: usize| {
-        let paths = (0..n).map(|i| RelPath::new(format!("f{i}"))).collect();
+        let paths = (0..n)
+            .map(|i| RelPath::parse(format!("f{i}")).expect("well-formed path"))
+            .collect();
         cs.text(&Rejection::Conflict(paths).message())
     };
     let cases: &[(usize, &str)] = &[
@@ -167,7 +164,9 @@ fn czech_plural_forms() {
 fn english_plural_forms() {
     let en = lang("en");
     let conflict = |n: usize| {
-        let paths = (0..n).map(|i| RelPath::new(format!("f{i}"))).collect();
+        let paths = (0..n)
+            .map(|i| RelPath::parse(format!("f{i}")).expect("well-formed path"))
+            .collect();
         en.text(&Rejection::Conflict(paths).message())
     };
     assert!(conflict(1).starts_with("One file was"), "{}", conflict(1));
@@ -264,7 +263,7 @@ fn nested_message_in_the_same_language() {
 #[test]
 fn collision_shows_only_the_name() {
     let m = DeferReason::CaseCollision {
-        with: RelPath::new("Documents/Příloha.pdf"),
+        with: RelPath::parse("Documents/Příloha.pdf").expect("well-formed path"),
     }
     .message();
     assert!(
@@ -452,8 +451,12 @@ fn conflict_copy_name() {
     ];
     for (code, path, number, expected) in cases {
         assert_eq!(
-            lang(code).conflict_copy_name(&RelPath::new(*path), "2026-11-15", *number),
-            RelPath::new(*expected),
+            lang(code).conflict_copy_name(
+                &RelPath::parse(*path).expect("well-formed path"),
+                "2026-11-15",
+                *number
+            ),
+            RelPath::parse(*expected).ok(),
             "{code} {path} {number}"
         );
     }
@@ -465,8 +468,12 @@ fn slash_from_a_translation_stays_in_the_folder() {
     d.language("xx", "conflict-copy-name = { $stem }/copy{ $extension }\n");
     let t = Translations::with_dir(&["xx".into()], d.path()).expect("load");
     assert_eq!(
-        t.conflict_copy_name(&RelPath::new("d/a.txt"), "2026-11-15", 1),
-        RelPath::new("d/a-copy.txt")
+        t.conflict_copy_name(
+            &RelPath::parse("d/a.txt").expect("well-formed path"),
+            "2026-11-15",
+            1
+        ),
+        RelPath::parse("d/a-copy.txt").ok()
     );
 }
 

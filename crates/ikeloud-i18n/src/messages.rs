@@ -54,8 +54,6 @@ impl ToMessage for DeferReason {
 impl ToMessage for NameError {
     fn message(&self) -> Message {
         match self {
-            Self::EmptyComponent => Message::new("deferred-name-empty"),
-            Self::DotOrDotDot => Message::new("deferred-name-dot"),
             Self::ForbiddenChar(_) => Message::new("deferred-name-char"),
             Self::TooLong => Message::new("deferred-name-too-long"),
         }

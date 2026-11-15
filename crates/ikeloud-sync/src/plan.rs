@@ -90,7 +90,7 @@ pub struct Plan {
 ///
 /// Local files unchanged for less than `settle_time` are left alone (see
 /// the module documentation). `conflict_name(path, n)` returns the name of a
-/// conflict copy of `path`; `n` is the attempt number from 1 and increases
+/// conflict copy of `path` (`None`: the translation gives no usable name); `n` is the attempt number from 1 and increases
 /// until the name is free (at most [`MAX_COPY_NAME_ATTEMPTS`]). The caller
 /// supplies the name because the user sees it and it is translated.
 ///
@@ -100,7 +100,7 @@ pub struct Plan {
 pub fn build_plan(
     states: &States,
     settle_time: Duration,
-    conflict_name: &dyn Fn(&RelPath, u32) -> RelPath,
+    conflict_name: &dyn Fn(&RelPath, u32) -> Option<RelPath>,
 ) -> Plan {
     let mut planner = Planner::new(states, conflict_name);
     planner.run(states, settle_time);
@@ -111,7 +111,7 @@ pub fn build_plan(
 }
 
 struct Planner<'a> {
-    conflict_name: &'a dyn Fn(&RelPath, u32) -> RelPath,
+    conflict_name: &'a dyn Fn(&RelPath, u32) -> Option<RelPath>,
     plan: Plan,
     /// Normalized names taken on each side, with who holds them.
     local_taken: BTreeMap<String, LocalId>,
@@ -125,7 +125,7 @@ struct Planner<'a> {
 }
 
 impl<'a> Planner<'a> {
-    fn new(states: &States, conflict_name: &'a dyn Fn(&RelPath, u32) -> RelPath) -> Self {
+    fn new(states: &States, conflict_name: &'a dyn Fn(&RelPath, u32) -> Option<RelPath>) -> Self {
         Self {
             conflict_name,
             plan: Plan::default(),
@@ -309,7 +309,7 @@ impl<'a> Planner<'a> {
             (None, None) => {}
             (Some(l), None) => {
                 let from = self.path_of(l);
-                let target = RelPath::new(nfc(from.as_str()));
+                let target = nfc_path(&from);
                 if self.remote_taken_by_other(&target, None) {
                     // A different file already has this name on iCloud: yield.
                     if let Some(copy) = self.free_copy_name(&from) {
@@ -365,7 +365,7 @@ impl<'a> Planner<'a> {
     /// Repeat a local move on the server, or yield if the name is taken there.
     fn move_remotely(&mut self, l: &LocalFile, r: &RemoteFile) {
         let from = self.path_of(l);
-        let target = RelPath::new(nfc(from.as_str()));
+        let target = nfc_path(&from);
         let to = if self.remote_taken_by_other(&target, Some(&r.doc_id)) {
             let Some(copy) = self.free_copy_name(&from) else {
                 return;
@@ -433,7 +433,9 @@ impl<'a> Planner<'a> {
     /// file is then reported and left alone.
     fn free_copy_name(&mut self, path: &RelPath) -> Option<RelPath> {
         for n in 1..=MAX_COPY_NAME_ATTEMPTS {
-            let candidate = (self.conflict_name)(path, n);
+            let Some(candidate) = (self.conflict_name)(path, n) else {
+                continue;
+            };
             let usable =
                 candidate.parent() == path.parent() && !safety_names::is_ignored(candidate.name());
             if usable && self.names_in_use.insert(key(candidate.as_str())) {
@@ -516,13 +518,13 @@ fn missing_folders(actions: &[Action], states: &States) -> Vec<Action> {
         .map(|p| key(p.as_str()))
         .collect();
     for f in &states.remote {
-        existing.extend(ancestors(f.path.as_str()).map(key));
+        existing.extend(f.path.ancestors().map(|a| key(a.as_str())));
     }
     let mut new: Vec<(usize, RelPath)> = Vec::new();
     for path in actions.iter().filter_map(Action::new_remote_name) {
-        for ancestor in ancestors(path.as_str()) {
-            if existing.insert(key(ancestor)) {
-                new.push((ancestor.matches('/').count(), RelPath::new(nfc(ancestor))));
+        for ancestor in path.ancestors() {
+            if existing.insert(key(ancestor.as_str())) {
+                new.push((ancestor.as_str().matches('/').count(), nfc_path(&ancestor)));
             }
         }
     }
@@ -532,8 +534,9 @@ fn missing_folders(actions: &[Action], states: &States) -> Vec<Action> {
         .collect()
 }
 
-/// Parent folders of a path, from the root: `a/b/c.txt` → `a`, `a/b`.
-fn ancestors(path: &str) -> impl Iterator<Item = &str> {
-    path.match_indices('/')
-        .filter_map(move |(i, _)| path.get(..i))
+/// The path in NFC, the form names are created in on the server. NFC never
+/// turns a well-formed path into a malformed one (it adds no `/`, NUL or
+/// dot component); should it ever, the path stays as it was.
+fn nfc_path(path: &RelPath) -> RelPath {
+    path.map(nfc).unwrap_or_else(|| path.clone())
 }

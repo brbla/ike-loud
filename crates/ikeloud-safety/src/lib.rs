@@ -17,7 +17,9 @@ pub mod names;
 #[cfg(kani)]
 mod proofs;
 
-pub use action::{Action, Change, ChangeKind, ContentHash, Etag, LocalId, LocalVersion, RelPath};
+pub use action::{
+    Action, Change, ChangeKind, ContentHash, Etag, LocalId, LocalVersion, PathError, RelPath,
+};
 pub use assessment::{
     ApprovedAction, ApprovedPlan, Decision, DeferReason, DeferredAction, MassChangeConfirmation,
     MassChangeSummary, Rejection, assess,

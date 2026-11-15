@@ -2,7 +2,10 @@
 //! test describes files the same way: short paths, small numbers for
 //! identities, short strings for hashes and etags.
 //!
-//! Only a dev-dependency (checked by `scripts/check-deps.py`).
+//! Only a dev-dependency (checked by `scripts/check-deps.py`), so like
+//! test code it may panic on a malformed builder argument.
+
+#![allow(clippy::expect_used)]
 
 use std::time::Duration;
 
@@ -19,7 +22,7 @@ pub const STABLE: Duration = Duration::from_secs(60);
 
 /// A relative path.
 pub fn p(path: &str) -> RelPath {
-    RelPath::new(path)
+    RelPath::parse(path).expect("well-formed path")
 }
 
 /// Identity of local file number `n`: device 1, inode `n`, born at `n`.

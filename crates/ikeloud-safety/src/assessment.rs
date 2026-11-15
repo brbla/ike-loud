@@ -205,7 +205,7 @@ fn defer_reason(
     if let Mode::ReadOnly(reason) = context.mode {
         return Some(DeferReason::ReadOnly(reason));
     }
-    if let Err(error) = names::validate_path(action.path().as_str()) {
+    if let Err(error) = names::validate_path(action.path()) {
         return Some(DeferReason::InvalidName(error));
     }
     if let Some(with) = collisions.get(action.path()) {
