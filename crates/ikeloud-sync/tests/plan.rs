@@ -91,7 +91,7 @@ fn replay_local(states: &States, plan: &Plan) {
                 disk.insert(to_key, to.as_str().to_string());
             }
             Action::Download {
-                path,
+                local: path,
                 overwrites_local,
                 ..
             } => {
@@ -120,8 +120,13 @@ fn plan(states: &States) -> Plan {
 }
 
 fn upload(path: &str, etag: Option<&str>) -> Action {
+    upload_from(path, path, etag)
+}
+
+fn upload_from(local: &str, remote: &str, etag: Option<&str>) -> Action {
     Action::Upload {
-        path: p(path),
+        local: p(local),
+        remote: p(remote),
         expected_etag: etag.map(Etag::new),
         size: 7,
         stable_for: Duration::from_secs(60),
@@ -130,7 +135,8 @@ fn upload(path: &str, etag: Option<&str>) -> Action {
 
 fn download(path: &str, overwrites: bool) -> Action {
     Action::Download {
-        path: p(path),
+        remote: p(path),
+        local: p(path),
         size: 9,
         overwrites_local: overwrites,
     }
@@ -451,7 +457,10 @@ fn content_first_then_path() {
         base: vec![base("a", 1, "d1", "h1", "e1")],
         ..States::default()
     };
-    assert_eq!(plan(&states).actions, vec![upload("a", Some("e1"))]);
+    assert_eq!(
+        plan(&states).actions,
+        vec![upload_from("b", "a", Some("e1"))]
+    );
 }
 
 // --- path collisions ---------------------------------------------------------------------
@@ -558,7 +567,7 @@ fn pairing_new_files_after_normalization() {
                 local: vec![local(nfd, 1, "h1")],
                 ..States::default()
             },
-            vec![upload("Příloha.pdf", None)],
+            vec![upload_from(nfd, "Příloha.pdf", None)],
         ),
         (
             "NFD locally and NFC on iCloud, both new: the same name",

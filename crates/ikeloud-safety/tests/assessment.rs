@@ -24,7 +24,8 @@ fn e(s: &str) -> Etag {
 
 fn upload(path: &str, etag: Option<&str>) -> Action {
     Action::Upload {
-        path: p(path),
+        local: p(path),
+        remote: p(path),
         expected_etag: etag.map(e),
         size: 10,
         stable_for: Duration::from_secs(60),
@@ -33,7 +34,8 @@ fn upload(path: &str, etag: Option<&str>) -> Action {
 
 fn upload_stable(path: &str, stable_for: Duration) -> Action {
     Action::Upload {
-        path: p(path),
+        local: p(path),
+        remote: p(path),
         expected_etag: None,
         size: 10,
         stable_for,
@@ -49,7 +51,8 @@ fn trash(path: &str, etag: &str) -> Action {
 
 fn download(path: &str, overwrites_local: bool) -> Action {
     Action::Download {
-        path: p(path),
+        remote: p(path),
+        local: p(path),
         size: 10,
         overwrites_local,
     }
@@ -640,7 +643,8 @@ fn huge_files_do_not_overflow() {
     let mut c = context(0);
     c.icloud_free = Some(u64::MAX - 1);
     let huge = |path: &str| Action::Upload {
-        path: p(path),
+        local: p(path),
+        remote: p(path),
         expected_etag: None,
         size: u64::MAX,
         stable_for: Duration::from_secs(60),

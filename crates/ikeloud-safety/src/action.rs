@@ -63,8 +63,11 @@ impl Etag {
 pub enum Action {
     /// Upload a local file to the server.
     Upload {
+        /// Which local file (may differ from `remote` when the file was
+        /// also moved; the move follows in a later run).
+        local: RelPath,
         /// Where on the server.
-        path: RelPath,
+        remote: RelPath,
         /// Server version the engine knows; `None` = the file is not there.
         expected_etag: Option<Etag>,
         /// Size in bytes.
@@ -102,8 +105,11 @@ pub enum Action {
     },
     /// Download a file from the server.
     Download {
-        /// What to download.
-        path: RelPath,
+        /// Which server file.
+        remote: RelPath,
+        /// Where locally (may differ from `remote` when the file was also
+        /// moved; the move follows in a later run).
+        local: RelPath,
         /// Size in bytes.
         size: u64,
         /// Overwrites an existing local file (the previous version goes to history).
@@ -124,14 +130,15 @@ pub enum Action {
 }
 
 impl Action {
-    /// The path the action is about (the target for moves).
+    /// The path the action writes to: the server path for uploads, the
+    /// local path for downloads, the target for moves.
     pub fn path(&self) -> &RelPath {
         match self {
-            Self::Upload { path, .. }
+            Self::Upload { remote: path, .. }
+            | Self::Download { local: path, .. }
             | Self::UploadConflictCopy { path, .. }
             | Self::CreateRemoteFolder { path }
             | Self::TrashRemote { path, .. }
-            | Self::Download { path, .. }
             | Self::TrashLocal { path } => path,
             Self::MoveRemote { to, .. } | Self::MoveLocal { to, .. } => to,
         }

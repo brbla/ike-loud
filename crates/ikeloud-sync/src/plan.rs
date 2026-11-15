@@ -221,16 +221,21 @@ impl<'a> Planner<'a> {
             // Deleted on Linux, changed on iCloud: iCloud wins, restore it.
             (None, Some(r)) => self.place_locally(r),
             (Some(l), Some(r)) => match (local_changed, remote_changed) {
-                (true, false) => self.push(Action::Upload {
-                    path: r.path.clone(),
-                    expected_etag: Some(r.etag.clone()),
-                    size: l.size,
-                    stable_for: l.stable_for,
-                }),
+                (true, false) => {
+                    let local = self.path_of(l);
+                    self.push(Action::Upload {
+                        local,
+                        remote: r.path.clone(),
+                        expected_etag: Some(r.etag.clone()),
+                        size: l.size,
+                        stable_for: l.stable_for,
+                    });
+                }
                 (false, true) => {
-                    let path = self.path_of(l);
+                    let local = self.path_of(l);
                     self.push(Action::Download {
-                        path,
+                        remote: r.path.clone(),
+                        local,
                         size: r.size,
                         overwrites_local: true,
                     });
@@ -240,7 +245,8 @@ impl<'a> Planner<'a> {
                     let original = self.path_of(l);
                     self.keep_as_conflict_copy(l);
                     self.push(Action::Download {
-                        path: original,
+                        remote: r.path.clone(),
+                        local: original,
                         size: r.size,
                         overwrites_local: false,
                     });
@@ -283,9 +289,9 @@ impl<'a> Planner<'a> {
                     // A different file already has this name on iCloud: yield.
                     let copy = self.free_copy_name(&from);
                     self.local_move(l.inode, from, copy.clone());
-                    self.push(upload_new(l, copy));
+                    self.push(upload_new(l, copy.clone(), copy));
                 } else {
-                    self.push(upload_new(l, target));
+                    self.push(upload_new(l, from, target));
                 }
             }
             (None, Some(r)) => self.place_locally(r),
@@ -295,7 +301,8 @@ impl<'a> Planner<'a> {
             (Some(l), Some(r)) => {
                 self.keep_as_conflict_copy(l);
                 self.push(Action::Download {
-                    path: r.path.clone(),
+                    remote: r.path.clone(),
+                    local: r.path.clone(),
                     size: r.size,
                     overwrites_local: false,
                 });
@@ -318,7 +325,8 @@ impl<'a> Planner<'a> {
     fn place_locally(&mut self, r: &RemoteFile) {
         self.evict_local(&r.path, None);
         self.push(Action::Download {
-            path: r.path.clone(),
+            remote: r.path.clone(),
+            local: r.path.clone(),
             size: r.size,
             overwrites_local: false,
         });
@@ -408,9 +416,10 @@ impl<'a> Planner<'a> {
     }
 }
 
-fn upload_new(l: &LocalFile, path: RelPath) -> Action {
+fn upload_new(l: &LocalFile, local: RelPath, remote: RelPath) -> Action {
     Action::Upload {
-        path,
+        local,
+        remote,
         expected_etag: None,
         size: l.size,
         stable_for: l.stable_for,
@@ -461,7 +470,7 @@ fn missing_folders(actions: &[Action], states: &States) -> Vec<Action> {
     for a in actions {
         let path = match a {
             Action::Upload {
-                path,
+                remote: path,
                 expected_etag: None,
                 ..
             }

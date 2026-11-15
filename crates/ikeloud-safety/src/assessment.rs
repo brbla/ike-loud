@@ -237,7 +237,7 @@ fn case_collisions(
 fn new_remote_path(action: &Action) -> Option<&RelPath> {
     match action {
         Action::Upload {
-            path,
+            remote: path,
             expected_etag: None,
             ..
         }
@@ -253,7 +253,7 @@ fn check_conflicts(actions: &[Action], remote: &BTreeMap<RelPath, Etag>) -> Resu
     for a in actions {
         let matches = match a {
             Action::Upload {
-                path,
+                remote: path,
                 expected_etag,
                 ..
             } => remote.get(path) == expected_etag.as_ref(),
