@@ -32,11 +32,21 @@ rejected-conflict =
        *[other] { $count } souborů se mezitím změnilo i na jiném zařízení.
     } Nic se nepřepsalo; synchronizace to za chvíli vyřeší a obě verze zachová.
 rejected-mass-change =
-    Synchronizace by najednou smazala nebo přepsala { $count ->
-        [one] jeden soubor
-        [few] { $count } soubory
-       *[other] { $count } souborů
-    } z { $total }. Než bude pokračovat, potvrďte prosím, že je to v pořádku.
+    { $changes ->
+        [0] {""}
+       *[other] Synchronizace by během dne smazala nebo přepsala { $changes ->
+            [one] jeden soubor
+            [few] { $changes } soubory
+           *[other] { $changes } souborů
+        } z { $total }.{" "}
+    }{ $moves ->
+        [0] {""}
+       *[other] Synchronizace by během dne přesunula { $moves ->
+            [one] jeden soubor
+            [few] { $moves } soubory
+           *[other] { $moves } souborů
+        } z { $total }.{" "}
+    }Než bude pokračovat, zkontrolujte prosím seznam souborů a potvrďte, že je to v pořádku.
 rejected-icloud-space =
     Na iCloudu není dost místa: potřeba { $needed }, volno { $free }. Synchronizace stojí a nic se nemaže. Uvolněte místo na iCloudu nebo si ho dokupte.
 rejected-disk-space =

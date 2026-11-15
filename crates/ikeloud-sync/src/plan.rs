@@ -519,17 +519,7 @@ fn missing_folders(actions: &[Action], states: &States) -> Vec<Action> {
         existing.extend(ancestors(f.path.as_str()).map(key));
     }
     let mut new: Vec<(usize, RelPath)> = Vec::new();
-    for a in actions {
-        let path = match a {
-            Action::Upload {
-                remote: path,
-                expected_etag: None,
-                ..
-            }
-            | Action::UploadConflictCopy { path, .. } => path,
-            Action::MoveRemote { to, .. } => to,
-            _ => continue,
-        };
+    for path in actions.iter().filter_map(Action::new_remote_name) {
         for ancestor in ancestors(path.as_str()) {
             if existing.insert(key(ancestor)) {
                 new.push((ancestor.matches('/').count(), RelPath::new(nfc(ancestor))));

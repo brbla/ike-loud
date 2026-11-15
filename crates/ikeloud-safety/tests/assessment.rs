@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use ikeloud_safety::names::NameError;
 use ikeloud_safety::{
-    Action, ContentHash, Context, Decision, DeferReason, Destruction, DestructionKind, Etag,
-    LocalFolderState, LocalId, LocalVersion, Mode, ReadOnlyReason, Rejection, RelPath, assess,
+    Action, Change, ChangeKind, ContentHash, Context, Decision, DeferReason, Etag,
+    LocalFolderState, LocalId, LocalVersion, Mode, ReadOnlyReason, RecentChanges, Rejection,
+    RelPath, assess,
 };
 
 // --- helpers -----------------------------------------------------------------
@@ -94,9 +95,17 @@ fn download(path: &str, overwrites_local: bool) -> Action {
     }
 }
 
+/// The engine's name key, for these tests without the Unicode tables:
+/// lower case, and the one decomposed letter the tests use (`Ř` as R + ˇ).
+fn lowercase_and_nfc(name: &str) -> String {
+    name.replace("R\u{30c}", "Ř")
+        .replace("r\u{30c}", "ř")
+        .to_lowercase()
+}
+
 /// Context with `n` synced files `f0`…`f{n-1}` with etag `v1`.
 fn context(n: u64) -> Context {
-    let mut c = Context::new(n);
+    let mut c = Context::new(n, lowercase_and_nfc);
     for i in 0..n {
         c.remote_etags.insert(p(&format!("f{i}")), e("v1"));
     }
@@ -140,7 +149,9 @@ fn deferred(run: usize, reasons: Vec<DeferReason>) -> Outcome {
 
 fn mass_change(outcome: &Outcome) -> Option<(u64, u64)> {
     match outcome {
-        Outcome::Rejected(Rejection::MassChangeNeedsConfirmation(s)) => Some((s.count(), s.total)),
+        Outcome::Rejected(Rejection::MassChangeNeedsConfirmation(s)) => {
+            Some((s.destructive(), s.total))
+        }
         _ => None,
     }
 }
@@ -352,7 +363,7 @@ fn brake_what_counts() {
     let local_trash: Vec<Action> = (0..60).map(|i| trash_local(&format!("f{i}"))).collect();
 
     let cases: Vec<(&str, Vec<Action>, bool)> = vec![
-        ("moves do not count", moves, false),
+        ("100 moves do not count as deletions", moves, false),
         ("overwrites on the server count", overwrites, true),
         ("new files do not count", new_files, false),
         ("downloads over local files count", download_over, true),
@@ -384,12 +395,13 @@ fn brake_confirmation_covers_exactly_the_listed_files() {
     else {
         panic!("expected the brake");
     };
-    assert_eq!(summary.count(), 120);
+    assert_eq!(summary.destructive(), 120);
     assert_eq!(
         summary.files.first(),
-        Some(&Destruction {
-            kind: DestructionKind::OverwriteRemote,
+        Some(&Change {
+            kind: ChangeKind::OverwriteRemote,
             path: p("f0"),
+            to: None,
             version: "v1".into(),
         }),
         "the user sees which files and what happens to them"
@@ -443,6 +455,87 @@ fn brake_confirmation_covers_exactly_the_listed_files() {
         mass_change(&run(plan, &changed_version)).is_some(),
         "the files changed on the server since the user confirmed"
     );
+}
+
+#[test]
+fn brake_counts_over_the_window() {
+    // (name, deletions earlier in the window, the plan, should brake)
+    let new_files: Vec<Action> = (0..5).map(|i| upload(&format!("n{i}"), None)).collect();
+    let cases: Vec<(&str, u64, Vec<Action>, bool)> = vec![
+        ("45 earlier + 5 now: at the limit", 45, delete(5), false),
+        (
+            "45 earlier + 6 now: a slow deletion is caught",
+            45,
+            delete(6),
+            true,
+        ),
+        (
+            "60 earlier, this plan deletes nothing: no question",
+            60,
+            new_files,
+            false,
+        ),
+        (
+            "60 earlier, one more: asks (the user confirms, and the daemon \
+             counts the window from the confirmation)",
+            60,
+            delete(1),
+            true,
+        ),
+    ];
+    for (name, earlier, plan, should_brake) in cases {
+        let mut c = context(1000);
+        c.recent = RecentChanges {
+            destructive: earlier,
+            moves: 0,
+        };
+        let o = run(plan, &c);
+        assert_eq!(mass_change(&o).is_some(), should_brake, "{name}: {o:?}");
+    }
+}
+
+#[test]
+fn brake_counts_moves_apart() {
+    let moves = |n: u64| -> Vec<Action> {
+        (0..n)
+            .map(|i| move_local(&format!("f{i}"), &format!("g{i}")))
+            .collect()
+    };
+    let summary = |o: &Outcome| match o {
+        Outcome::Rejected(Rejection::MassChangeNeedsConfirmation(s)) => {
+            Some((s.destructive(), s.moves()))
+        }
+        _ => None,
+    };
+    // (name, synced files, moves earlier, plan, expected (deletions, moves))
+    type Case = (&'static str, u64, u64, Vec<Action>, Option<(u64, u64)>);
+    let cases: Vec<Case> = vec![
+        ("renaming a folder of 500 files", 2000, 0, moves(500), None),
+        ("501 moves at once", 2000, 0, moves(501), Some((0, 501))),
+        (
+            "more than half of the files moved within a day",
+            200,
+            90,
+            moves(11),
+            Some((0, 101)),
+        ),
+        (
+            "moves do not add up with deletions",
+            2000,
+            0,
+            {
+                let mut plan = moves(400);
+                plan.extend(delete(40));
+                plan
+            },
+            None,
+        ),
+    ];
+    for (name, synced, earlier, plan, expected) in cases {
+        let mut c = context(synced);
+        c.recent.moves = earlier;
+        assert_eq!(summary(&run(plan, &c)), expected, "{name}");
+    }
 }
 
 #[test]
@@ -626,9 +719,11 @@ fn case_collisions() {
     let mut c = context(0);
     c.remote_etags.insert(p("Photo.jpg"), e("v1"));
     c.remote_etags.insert(p("Documents/Příloha.pdf"), e("v1"));
-    c.synced_count = 2;
-    c.remote_item_count = 2;
-    c.local_folder = LocalFolderState::Available { file_count: 2 };
+    // Written by a Mac: decomposed (NFD).
+    c.remote_etags.insert(p("Mac/PR\u{30c}ÍLOHA.txt"), e("v1"));
+    c.synced_count = 3;
+    c.remote_item_count = 3;
+    c.local_folder = LocalFolderState::Available { file_count: 3 };
 
     let collision = |s: &str| deferred(0, vec![DeferReason::CaseCollision { with: p(s) }]);
     let cases: Vec<(&str, Vec<Action>, Outcome)> = vec![
@@ -641,6 +736,11 @@ fn case_collisions() {
             "Czech letters",
             vec![upload("Documents/PŘÍLOHA.pdf", None)],
             collision("Documents/Příloha.pdf"),
+        ),
+        (
+            "NFD on the server, NFC and another case in the plan",
+            vec![upload("Mac/příloha.txt", None)],
+            collision("Mac/PR\u{30c}ÍLOHA.txt"),
         ),
         (
             "two new names in the plan",

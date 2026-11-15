@@ -1,7 +1,9 @@
 //! Rules for file names and for files that are never synced.
 //!
-//! Unicode normalization (NFC) is done by the engine before the plan comes
-//! here; this crate uses the standard library only.
+//! Comparing names (Unicode normalization and letter case) needs Unicode
+//! tables this crate does not have: it uses the standard library only. The
+//! engine's comparison is passed in [`crate::Context::name_key`], so there
+//! is one definition of "the same name" (`ikeloud_sync::names::key`).
 
 /// Why a name cannot be uploaded to the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,11 +59,4 @@ pub fn is_ignored(name: &str) -> bool {
         || name.ends_with(".swp")
         || name.ends_with(".part")
         || name == ".DS_Store"
-}
-
-/// Key for comparing names regardless of letter case.
-///
-/// iCloud does not distinguish upper and lower case, Linux does.
-pub fn case_insensitive_key(name: &str) -> String {
-    name.to_lowercase()
 }

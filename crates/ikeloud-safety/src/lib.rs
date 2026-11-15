@@ -15,13 +15,12 @@ pub mod assessment;
 pub mod context;
 pub mod names;
 
-pub use action::{
-    Action, ContentHash, Destruction, DestructionKind, Etag, LocalId, LocalVersion, RelPath,
-};
+pub use action::{Action, Change, ChangeKind, ContentHash, Etag, LocalId, LocalVersion, RelPath};
 pub use assessment::{
     ApprovedAction, ApprovedPlan, Decision, DeferReason, DeferredAction, MassChangeConfirmation,
     MassChangeSummary, Rejection, assess,
 };
 pub use context::{
-    Context, DEFAULT_SETTLE_TIME, LocalFolderState, MassChangeLimits, Mode, ReadOnlyReason,
+    BRAKE_WINDOW, Context, DEFAULT_SETTLE_TIME, LocalFolderState, MassChangeLimits, Mode,
+    ReadOnlyReason, RecentChanges, Threshold,
 };

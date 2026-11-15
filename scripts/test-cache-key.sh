@@ -14,9 +14,10 @@ trap 'rm -rf "$WORK"' EXIT
 cd "$ROOT"
 mkdir -p "$WORK/repo"
 {
-    printf '%s\n' scripts/ci-cache-key.sh Cargo.lock Cargo.toml .cargo/config.toml \
-        rust-toolchain.toml README.md crates/ikeloud-safety/src/lib.rs
+    printf '%s\n' scripts/ci-cache-key.sh scripts/mutants.sh Cargo.lock Cargo.toml \
+        .cargo/config.toml rust-toolchain.toml README.md crates/ikeloud-sync/src/lib.rs
     find crates -mindepth 2 -maxdepth 2 -name Cargo.toml
+    find crates/ikeloud-safety -type f
     find vendor -name .cargo-checksum.json
 } | while read -r f; do
     mkdir -p "$WORK/repo/$(dirname "$f")"
@@ -33,6 +34,8 @@ fake_tool() { # name, text printed by --version / -vV
     chmod +x "$FAKE/$1"
 }
 
+# Mode of the key under test (empty: dependency cache; --mutants).
+MODE=()
 baseline="$(cd "$REPO" && "$KEY")"
 # The key must be deterministic: compute it many times.
 for _ in $(seq 1 20); do
@@ -51,7 +54,7 @@ check() {
     local snapshot="$WORK/snapshot"
     rm -rf "$snapshot" && cp -r "$REPO" "$snapshot"
     local key
-    key="$(cd "$REPO" && "$@" && "$KEY")" || key="error"
+    key="$(cd "$REPO" && "$@" && "$KEY" "${MODE[@]}")" || key="error"
     rm -rf "$REPO" && mv "$snapshot" "$REPO"
     local got=same
     [[ "$key" != "$baseline" ]] && got=different
@@ -70,7 +73,7 @@ check "repeated run" same true
 check "unrelated env var" same export SOME_UNRELATED_VARIABLE=x
 check "GitHub run id" same export GITHUB_RUN_ID=123
 check "runner image build number" same export ImageVersion=20261111.999.1
-check "our source code" same edit crates/ikeloud-safety/src/lib.rs
+check "our source code" same edit crates/ikeloud-sync/src/lib.rs
 check "documentation" same edit README.md
 check "Cargo.lock" different edit Cargo.lock
 check "workspace manifest" different edit Cargo.toml
@@ -107,11 +110,41 @@ rm "$FAKE/ld"; fake_tool ldd "ldd (fake libc) 0.0"
 check "C library version" different export PATH="$FAKE:$PATH"
 rm "$FAKE/ldd"
 
+# The key of a passed mutation run (--mutants): every input of the run
+# changes it; code the safety layer does not use does not.
+MODE=(--mutants)
+baseline="$(cd "$REPO" && "$KEY" --mutants)"
+for _ in $(seq 1 5); do
+    [[ "$(cd "$REPO" && "$KEY" --mutants)" == "$baseline" ]] || {
+        echo "FAIL the mutants key is not deterministic" >&2
+        exit 1
+    }
+done
+check "mutants: repeated run" same true
+check "mutants: another crate's code" same edit crates/ikeloud-sync/src/lib.rs
+check "mutants: documentation" same edit README.md
+check "mutants: vendored crate (safety has none)" same sed -i 's/"package"/"package" /' "$first_vendor_checksum"
+check "mutants: safety source" different edit crates/ikeloud-safety/src/lib.rs
+check "mutants: safety test" different edit crates/ikeloud-safety/tests/assessment.rs
+check "mutants: new safety test" different sh -c 'echo "// x" > crates/ikeloud-safety/tests/new.rs'
+check "mutants: safety manifest" different edit crates/ikeloud-safety/Cargo.toml
+check "mutants: workspace manifest (lints)" different edit Cargo.toml
+check "mutants: Cargo.lock" different edit Cargo.lock
+check "mutants: cargo config" different edit .cargo/config.toml
+check "mutants: rust-toolchain.toml" different edit rust-toolchain.toml
+check "mutants: the script" different edit scripts/mutants.sh
+check "mutants: cargo-mutants pin" different export CARGO_MUTANTS_VERSION=changed
+check "mutants: RUSTFLAGS" different export RUSTFLAGS=changed
+fake_tool rustc "rustc 0.0.0-fake"
+check "mutants: rustc version" different export PATH="$FAKE:$PATH"
+rm "$FAKE/rustc"
+MODE=()
+
 # The tool cache key (--tools): pins, toolchain and platform change it.
-tools_baseline="$(cd "$WORK" && CARGO_DENY_VERSION=1 CARGO_AUDIT_VERSION=1 CARGO_VET_VERSION=1 "$KEY" --tools)"
-check_tools() { # name, env assignment, expected
+tools_baseline="$(cd "$WORK" && CARGO_DENY_VERSION=1 CARGO_AUDIT_VERSION=1 CARGO_VET_VERSION=1 "$KEY" --tools set-a)"
+check_tools() { # name, env assignment, expected[, tool set]
     local key
-    key="$(cd "$WORK" && env CARGO_DENY_VERSION=1 CARGO_AUDIT_VERSION=1 CARGO_VET_VERSION=1 "$2" "$KEY" --tools)"
+    key="$(cd "$WORK" && env CARGO_DENY_VERSION=1 CARGO_AUDIT_VERSION=1 CARGO_VET_VERSION=1 "$2" "$KEY" --tools "${4:-set-a}")"
     local got=same
     [[ "$key" != "$tools_baseline" ]] && got=different
     if [[ "$got" == "$3" ]]; then echo "ok   tools: $1 ($got)"; else
@@ -122,6 +155,8 @@ check_tools "runner image build number" "ImageVersion=20261111.999.1" same
 check_tools "cargo-deny pin" "CARGO_DENY_VERSION=2" different
 check_tools "cargo-audit pin" "CARGO_AUDIT_VERSION=2" different
 check_tools "cargo-vet pin" "CARGO_VET_VERSION=2" different
+check_tools "a new pin, not listed anywhere" "CARGO_NEW_TOOL_VERSION=1" different
+check_tools "another tool set (another CI job)" "X_UNRELATED=1" different set-b
 check_tools "runner OS" "ImageOS=ubuntu99" different
 fake_tool rustc "rustc 0.0.0-fake"
 check_tools "rustc version" "PATH=$FAKE:$PATH" different

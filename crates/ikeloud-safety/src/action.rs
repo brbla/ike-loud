@@ -120,9 +120,9 @@ pub struct LocalVersion {
     pub hash: ContentHash,
 }
 
-/// What a destructive action does to a file.
+/// What an action the mass-change brake counts does to a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum DestructionKind {
+pub enum ChangeKind {
     /// Moves a server file to "Recently Deleted".
     TrashRemote,
     /// Replaces the content of a server file.
@@ -131,18 +131,32 @@ pub enum DestructionKind {
     TrashLocal,
     /// Replaces the content of a local file (the old one goes to history).
     OverwriteLocal,
+    /// Moves or renames a server file.
+    MoveRemote,
+    /// Moves or renames a local file.
+    MoveLocal,
 }
 
-/// One file a destructive action deletes or overwrites, with the version it
-/// was planned against. The user confirms a mass change as a set of these;
-/// the confirmation then covers exactly these versions of these files.
+impl ChangeKind {
+    /// A move (counted apart from deletions and overwrites).
+    pub fn is_move(self) -> bool {
+        matches!(self, Self::MoveRemote | Self::MoveLocal)
+    }
+}
+
+/// One file an action deletes, overwrites or moves, with the version it was
+/// planned against. The user confirms a mass change as a set of these; the
+/// confirmation then covers exactly these versions of these files.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Destruction {
+pub struct Change {
     /// What happens to the file.
-    pub kind: DestructionKind,
+    pub kind: ChangeKind,
     /// The file.
     pub path: RelPath,
-    /// Server etag or local content hash the action was planned against.
+    /// Where a move takes it.
+    pub to: Option<RelPath>,
+    /// What the action was planned against: the server etag, the local
+    /// content hash, or (a local move) the local identity.
     pub version: String,
 }
 
@@ -258,38 +272,100 @@ impl Action {
         )
     }
 
-    /// What the action deletes or overwrites, if anything. Counted by the
-    /// mass-change brake and listed to the user.
-    pub fn destruction(&self) -> Option<Destruction> {
-        let (kind, path, version) = match self {
+    /// The name the action creates on the server, if it creates one: a new
+    /// file, a conflict copy, a folder, or the target of a move. The planner
+    /// creates missing folders for these and the safety layer checks them
+    /// for case collisions.
+    pub fn new_remote_name(&self) -> Option<&RelPath> {
+        match self {
+            Self::Upload {
+                remote: path,
+                expected_etag: None,
+                ..
+            }
+            | Self::UploadConflictCopy { path, .. }
+            | Self::CreateRemoteFolder { path } => Some(path),
+            Self::MoveRemote { to, .. } => Some(to),
+            Self::Upload { .. }
+            | Self::TrashRemote { .. }
+            | Self::Download { .. }
+            | Self::TrashLocal { .. }
+            | Self::MoveLocal { .. } => None,
+        }
+    }
+
+    /// What the action does to an existing file, if the mass-change brake
+    /// counts it (deleting, overwriting, moving). Listed to the user.
+    pub fn change(&self) -> Option<Change> {
+        let (kind, path, to, version) = match self {
             Self::Upload {
                 remote,
                 expected_etag: Some(etag),
                 ..
-            } => (DestructionKind::OverwriteRemote, remote, etag.as_str()),
+            } => (
+                ChangeKind::OverwriteRemote,
+                remote,
+                None,
+                etag.as_str().to_owned(),
+            ),
             Self::Download {
                 local,
                 replaces: Some(old),
                 ..
-            } => (DestructionKind::OverwriteLocal, local, old.hash.as_str()),
+            } => (
+                ChangeKind::OverwriteLocal,
+                local,
+                None,
+                old.hash.as_str().to_owned(),
+            ),
             Self::TrashRemote {
                 path,
                 expected_etag,
-            } => (DestructionKind::TrashRemote, path, expected_etag.as_str()),
-            Self::TrashLocal { path, expected } => {
-                (DestructionKind::TrashLocal, path, expected.hash.as_str())
-            }
+            } => (
+                ChangeKind::TrashRemote,
+                path,
+                None,
+                expected_etag.as_str().to_owned(),
+            ),
+            Self::TrashLocal { path, expected } => (
+                ChangeKind::TrashLocal,
+                path,
+                None,
+                expected.hash.as_str().to_owned(),
+            ),
+            Self::MoveRemote {
+                from,
+                to,
+                expected_etag,
+            } => (
+                ChangeKind::MoveRemote,
+                from,
+                Some(to),
+                expected_etag.as_str().to_owned(),
+            ),
+            Self::MoveLocal { from, to, local_id } => (
+                ChangeKind::MoveLocal,
+                from,
+                Some(to),
+                format!(
+                    "{}:{}:{}",
+                    local_id.device,
+                    local_id.inode,
+                    local_id
+                        .birth_ns
+                        .map_or_else(|| "-".to_owned(), |b| b.to_string())
+                ),
+            ),
             Self::Upload { .. }
             | Self::Download { .. }
             | Self::UploadConflictCopy { .. }
-            | Self::CreateRemoteFolder { .. }
-            | Self::MoveRemote { .. }
-            | Self::MoveLocal { .. } => return None,
+            | Self::CreateRemoteFolder { .. } => return None,
         };
-        Some(Destruction {
+        Some(Change {
             kind,
             path: path.clone(),
-            version: version.to_owned(),
+            to: to.cloned(),
+            version,
         })
     }
 

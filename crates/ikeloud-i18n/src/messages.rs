@@ -19,11 +19,13 @@ impl ToMessage for Rejection {
         match self {
             Self::LocalFolderUnavailable => Message::new("rejected-local-folder-unavailable"),
             Self::SuspiciousRemoteListing => Message::new("rejected-suspicious-remote-listing"),
-            Self::Conflict(paths) => {
-                Message::new("rejected-conflict").arg("count", Value::Number(paths.len() as u64))
-            }
+            Self::Conflict(paths) => Message::new("rejected-conflict").arg(
+                "count",
+                Value::Number(u64::try_from(paths.len()).unwrap_or(u64::MAX)),
+            ),
             Self::MassChangeNeedsConfirmation(summary) => Message::new("rejected-mass-change")
-                .arg("count", Value::Number(summary.count()))
+                .arg("changes", Value::Number(summary.destructive()))
+                .arg("moves", Value::Number(summary.moves()))
                 .arg("total", Value::Number(summary.total)),
             Self::NotEnoughICloudSpace { needed, free } => Message::new("rejected-icloud-space")
                 .arg("needed", Value::Size(*needed))

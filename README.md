@@ -2,7 +2,7 @@
 
 Neoficiální klient pro iCloud Drive na Linuxu. Soubory z iCloudu se objeví jako běžná složka v domovském adresáři a změny se propíšou na iPhone a Mac. Nastavení zvládne i člověk, který nikdy neotevřel terminál.
 
-> **Stav:** projekt je ve fázi zadání. Zatím neexistuje kód ani instalovatelná verze. Zadání a plán realizace jsou v [ike-loud-zadani-a-plan.md](ike-loud-zadani-a-plan.md), schéma architektury v [architektura.mmd](architektura.mmd) a přehled podkladů v [PODKLADY.md](PODKLADY.md).
+> **Stav:** vzniká jádro synchronizace: plánovač, bezpečnostní vrstva, vykonavatel a uložený stav, ověřené testy, simulací a TLA+ modely. Spojení s iCloudem zatím chybí (čeká na testovací účet), takže neexistuje instalovatelná verze. Zadání a plán realizace jsou v [ike-loud-zadani-a-plan.md](ike-loud-zadani-a-plan.md), schéma architektury v [architektura.mmd](architektura.mmd), rozhodnutí v [docs/rozhodnuti](docs/rozhodnuti/) a přehled podkladů v [PODKLADY.md](PODKLADY.md).
 
 ## Proč
 
@@ -15,7 +15,7 @@ Data na iCloudu jsou důležitější než rychlost synchronizace. Když si apli
 - **iCloud je zdroj pravdy.** Při pochybnosti vyhraje verze na serveru a lokální verze se odloží stranou.
 - **Nic se nepřepisuje naslepo.** Před každým zápisem aplikace ověří verzi souboru. Pokud se mezitím změnil, vytvoří konfliktní kopii.
 - **Mazání jde vrátit.** Soubory smazané na Linuxu skončí na iCloudu v „Nedávno smazaných“.
-- **Hromadné změny mají brzdu.** Když by synchronizace najednou smazala nebo přepsala hodně souborů, zastaví se a počká na potvrzení.
+- **Hromadné změny mají brzdu.** Když by synchronizace během dne smazala, přepsala nebo přesunula hodně souborů, zastaví se, ukáže jejich seznam a počká na potvrzení.
 - **Každá akce je v deníku.** V deníku je vidět, co se kdy nahrálo, stáhlo a smazalo.
 
 ## Co umí první verze (plán)
@@ -35,7 +35,7 @@ Mimo rozsah: kalendář a kontakty (ty pokrývá CalDAV/CardDAV v GNOME a KDE), 
 
 Celé to bude v Rustu. Synchronizační démon poběží jako uživatelská služba a GUI v GTK4 a libadwaita s ním bude mluvit přes D-Bus. Chybějící oficiální dokumentaci API nahradí znalosti z backendu `iclouddrive` v [rclone](https://rclone.org/iclouddrive/) a z knihovny [pyicloud](https://pypi.org/project/pyicloud/).
 
-Bezpečnostní vrstvu hlídají testy, model checking (TLA+ a Kani) a deterministická simulace. Distribuovat se bude hlavně přes Flatpak.
+Synchronizaci a bezpečnostní vrstvu hlídají tabulkové testy, model checking v TLA+, deterministická simulace s nepřátelským světem, měření pokrytí a mutation testing. Distribuovat se bude hlavně přes Flatpak.
 
 ## Překlady
 

@@ -8,10 +8,19 @@
 #
 # Usage: scripts/ci-cache-key.sh                  -> key of the dependency cache
 #        scripts/ci-cache-key.sh --explain        -> its fingerprinted inputs
-#        scripts/ci-cache-key.sh --tools          -> key of the CI tool cache
-#        scripts/ci-cache-key.sh --tools --explain
-# --tools fingerprints the platform, the Rust toolchain active in the current
-# directory and the pinned tool versions (CARGO_DENY_VERSION, …).
+#        scripts/ci-cache-key.sh --tools SET      -> key of the CI tool cache SET
+#        scripts/ci-cache-key.sh --tools SET --explain
+#        scripts/ci-cache-key.sh --mutants        -> key of a passed mutation run
+#        scripts/ci-cache-key.sh --mutants --explain
+# --tools fingerprints the name of the tool set (each CI job caches its own
+# tools), the platform, the Rust toolchain active in the current directory
+# and every pinned tool version: all variables CARGO_*_VERSION, so a new pin
+# is covered without touching this script.
+#
+# --mutants fingerprints everything a run of scripts/mutants.sh depends on:
+# the safety crate (sources and tests), workspace manifests and lock, cargo
+# config, toolchain, build environment (including the tool pin) and the
+# script itself. A passed run under the same key need not run again.
 #
 # Adding an input: add it below AND a case to scripts/test-cache-key.sh.
 # Rules: .claude/skills/ci-cache/SKILL.md
@@ -51,10 +60,9 @@ platform() {
 
 tool_inputs() {
     echo "schema: tools-$SCHEMA"
+    echo "tool set: $1"
     platform
-    for var in CARGO_DENY_VERSION CARGO_AUDIT_VERSION CARGO_VET_VERSION; do
-        echo "pin $var: ${!var-<unset>}"
-    done
+    env | grep -E '^CARGO_[A-Z0-9_]+_VERSION=' | sort | sed 's/^/pin /' || true
 }
 
 inputs() {
@@ -77,10 +85,31 @@ inputs() {
     done
 }
 
+mutant_inputs() {
+    echo "schema: mutants-$SCHEMA"
+    platform
+    env | grep -E "^($ENV_PATTERN)=" | sort | sed 's/^/env /' || true
+    {
+        printf '%s\n' Cargo.lock Cargo.toml .cargo/config.toml rust-toolchain.toml \
+            scripts/mutants.sh
+        find crates/ikeloud-safety -type f
+    } | sort | while read -r file; do
+        echo "file $file: $(sha256sum "$file" | cut -d' ' -f1)"
+    done
+}
+
+if [[ "${1:-}" == "--mutants" ]]; then
+    cd "$ROOT"
+    if [[ "${2:-}" == "--explain" ]]; then mutant_inputs; exit 0; fi
+    echo "mutants-passed-$(uname -s)-$(mutant_inputs | sha256sum | cut -c1-32)"
+    exit 0
+fi
+
 if [[ "${1:-}" == "--tools" ]]; then
     # Runs where the tools are built (outside the repository).
-    if [[ "${2:-}" == "--explain" ]]; then tool_inputs; exit 0; fi
-    echo "tools-$(uname -s)-$(tool_inputs | sha256sum | cut -c1-32)"
+    set_name="${2:?usage: --tools SET [--explain]}"
+    if [[ "${3:-}" == "--explain" ]]; then tool_inputs "$set_name"; exit 0; fi
+    echo "tools-$set_name-$(uname -s)-$(tool_inputs "$set_name" | sha256sum | cut -c1-32)"
     exit 0
 fi
 cd "$ROOT"

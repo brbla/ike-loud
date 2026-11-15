@@ -12,10 +12,9 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RUSTFLAGS: -D warnings
-  # CI tools are pinned exactly; update deliberately, one per change.
-  CARGO_DENY_VERSION: 0.20.2
-  CARGO_AUDIT_VERSION: 0.22.2
-  CARGO_VET_VERSION: 0.10.2
+  # CI tools are pinned exactly in the job that uses them (so a tool update
+  # does not change the dependency cache key); update deliberately, one per
+  # change.
 
 # Caching (docs/rozhodnuti/0008, .claude/skills/ci-cache/SKILL.md):
 # - Only things that did not change are cached: compiled third-party
@@ -27,7 +26,10 @@ env:
 #   removed after restoring and before saving, and scripts/check-fresh.py
 #   fails the build if any of them was not compiled from current sources.
 # - Exact keys only (no restore-keys), so an older cache is never reused.
-# - Test and model-checking results are never cached.
+# - Test and model-checking results are never cached, with one exception:
+#   a passed mutation run of the safety layer, under the fingerprint of every
+#   input of that run (scripts/ci-cache-key.sh --mutants, tested by
+#   scripts/test-cache-key.sh). Any change to the safety crate runs it again.
 # Actions are pinned to commit SHAs.
 
 jobs:
@@ -117,6 +119,10 @@ jobs:
 
   supply-chain:
     runs-on: ubuntu-24.04
+    env:
+      CARGO_DENY_VERSION: 0.20.2
+      CARGO_AUDIT_VERSION: 0.22.2
+      CARGO_VET_VERSION: 0.10.2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -127,8 +133,8 @@ jobs:
         id: tools-key
         working-directory: ${{ runner.temp }}
         run: |
-          "$GITHUB_WORKSPACE/scripts/ci-cache-key.sh" --tools --explain
-          echo "key=$("$GITHUB_WORKSPACE/scripts/ci-cache-key.sh" --tools)" >> "$GITHUB_OUTPUT"
+          "$GITHUB_WORKSPACE/scripts/ci-cache-key.sh" --tools supply-chain --explain
+          echo "key=$("$GITHUB_WORKSPACE/scripts/ci-cache-key.sh" --tools supply-chain)" >> "$GITHUB_OUTPUT"
 
       - name: Cache cargo-deny, cargo-audit and cargo-vet
         id: tools
@@ -168,3 +174,79 @@ jobs:
             exit 1
           fi
           cargo vet --locked
+
+  # Coverage and mutation testing (spec, chapter Testing): what the tests are
+  # worth, not only whether they pass.
+  quality:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_LLVM_COV_VERSION: 0.9.1
+      CARGO_MUTANTS_VERSION: 27.1.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Toolchain from rust-toolchain.toml, with llvm-tools for coverage
+        run: |
+          rustup toolchain install
+          rustup component add llvm-tools
+
+      - name: Fingerprint of the tool cache inputs
+        id: tools-key
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$GITHUB_WORKSPACE/scripts/ci-cache-key.sh" --tools quality --explain
+          echo "key=$("$GITHUB_WORKSPACE/scripts/ci-cache-key.sh" --tools quality)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cargo-llvm-cov and cargo-mutants
+        id: tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/cargo-llvm-cov
+            ~/.cargo/bin/cargo-mutants
+          key: ${{ steps.tools-key.outputs.key }}
+
+      - name: Install cargo-llvm-cov and cargo-mutants
+        if: steps.tools.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          cargo install --locked cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION"
+          cargo install --locked cargo-mutants --version "$CARGO_MUTANTS_VERSION"
+
+      - name: Tool versions match the pins
+        run: |
+          cargo llvm-cov --version | grep -qF "$CARGO_LLVM_COV_VERSION"
+          cargo mutants --version | grep -qF "$CARGO_MUTANTS_VERSION"
+
+      # Spec: at least 90 % for ikeloud-safety and ikeloud-sync. The bar is
+      # set where the code is (98 %), so coverage cannot quietly drop.
+      - name: Coverage of ikeloud-safety and ikeloud-sync (at least 95 % of lines)
+        run: |
+          cargo llvm-cov --package ikeloud-safety --package ikeloud-sync \
+            --locked --offline --summary-only --fail-under-lines 95
+
+      - name: Fingerprint of the mutation run inputs
+        id: mutants-key
+        run: |
+          scripts/ci-cache-key.sh --mutants --explain
+          echo "key=$(scripts/ci-cache-key.sh --mutants)" >> "$GITHUB_OUTPUT"
+
+      - name: Did this exact safety layer already pass?
+        id: mutants-passed
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .mutants-passed
+          key: ${{ steps.mutants-key.outputs.key }}
+
+      - name: Mutation testing of ikeloud-safety (no mutant may survive)
+        if: steps.mutants-passed.outputs.cache-hit != 'true'
+        run: |
+          scripts/mutants.sh
+          echo "${{ steps.mutants-key.outputs.key }}" > .mutants-passed
+
+      - name: Remember the passed mutation run
+        if: steps.mutants-passed.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .mutants-passed
+          key: ${{ steps.mutants-key.outputs.key }}

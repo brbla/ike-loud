@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::action::{Action, Destruction, Etag, RelPath};
-use crate::context::{Context, LocalFolderState, Mode, ReadOnlyReason};
+use crate::action::{Action, Change, Etag, RelPath};
+use crate::context::{Context, LocalFolderState, Mode, ReadOnlyReason, RecentChanges};
 use crate::names::{self, NameError};
 
 /// An action the safety layer approved.
@@ -70,22 +70,33 @@ pub enum Decision {
 /// Overview of a mass change for asking the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MassChangeSummary {
-    /// The files that would be deleted or overwritten, sorted; shown to the
+    /// What this plan would delete, overwrite or move, sorted; shown to the
     /// user (spec: the question lists the affected files).
-    pub files: Vec<Destruction>,
+    pub files: Vec<Change>,
+    /// Changes already carried out in the brake window.
+    pub recent: RecentChanges,
     /// How many files are synced.
     pub total: u64,
 }
 
 impl MassChangeSummary {
-    /// How many files would be deleted or overwritten.
-    pub fn count(&self) -> u64 {
-        u64::try_from(self.files.len()).unwrap_or(u64::MAX)
+    /// Files deleted or overwritten in the brake window, this plan included.
+    pub fn destructive(&self) -> u64 {
+        self.recent
+            .destructive
+            .saturating_add(count(self.files.iter().filter(|f| !f.kind.is_move())))
+    }
+
+    /// Files moved in the brake window, this plan included.
+    pub fn moves(&self) -> u64 {
+        self.recent
+            .moves
+            .saturating_add(count(self.files.iter().filter(|f| f.kind.is_move())))
     }
 
     /// The user confirmed the change. The confirmation covers exactly the
-    /// listed files in the listed versions: a later plan that destroys only
-    /// some of them passes, one that destroys anything else asks again.
+    /// listed files in the listed versions: a later plan that changes only
+    /// some of them passes, one that changes anything else asks again.
     pub fn confirm(&self) -> MassChangeConfirmation {
         MassChangeConfirmation {
             files: self.files.iter().cloned().collect(),
@@ -93,10 +104,14 @@ impl MassChangeSummary {
     }
 }
 
+fn count<T>(items: impl Iterator<Item = T>) -> u64 {
+    u64::try_from(items.count()).unwrap_or(u64::MAX)
+}
+
 /// Confirmation of a mass change, bound to the files the user saw.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MassChangeConfirmation {
-    files: BTreeSet<Destruction>,
+    files: BTreeSet<Change>,
 }
 
 /// Why the plan is not carried out at all. Sync stops.
@@ -140,7 +155,7 @@ pub fn assess(plan: Vec<Action>, context: &Context) -> Result<Decision, Rejectio
 
     let mut to_run = Vec::new();
     let mut deferred = Vec::new();
-    let collisions = case_collisions(&plan, &context.remote_etags);
+    let collisions = case_collisions(&plan, &context.remote_etags, context.name_key);
     for action in plan {
         match defer_reason(&action, context, &collisions) {
             Some(reason) => deferred.push(DeferredAction { action, reason }),
@@ -210,14 +225,15 @@ fn defer_reason(
 fn case_collisions(
     plan: &[Action],
     remote: &BTreeMap<RelPath, Etag>,
+    name_key: fn(&str) -> String,
 ) -> BTreeMap<RelPath, RelPath> {
     let mut taken: BTreeMap<String, RelPath> = remote
         .keys()
-        .map(|p| (names::case_insensitive_key(p.as_str()), p.clone()))
+        .map(|p| (name_key(p.as_str()), p.clone()))
         .collect();
     let mut collisions = BTreeMap::new();
     for action in plan {
-        let Some(new) = new_remote_path(action) else {
+        let Some(new) = action.new_remote_name() else {
             continue;
         };
         // Renaming a document to a different letter case of its own name is
@@ -226,7 +242,7 @@ fn case_collisions(
             Action::MoveRemote { from, .. } => Some(from),
             _ => None,
         };
-        let key = names::case_insensitive_key(new.as_str());
+        let key = name_key(new.as_str());
         match taken.get(&key) {
             Some(existing) if Some(existing) == renamed_from => {}
             Some(existing) if existing != new => {
@@ -239,20 +255,6 @@ fn case_collisions(
         }
     }
     collisions
-}
-
-fn new_remote_path(action: &Action) -> Option<&RelPath> {
-    match action {
-        Action::Upload {
-            remote: path,
-            expected_etag: None,
-            ..
-        }
-        | Action::UploadConflictCopy { path, .. }
-        | Action::CreateRemoteFolder { path } => Some(path),
-        Action::MoveRemote { to, .. } => Some(to),
-        _ => None,
-    }
 }
 
 fn check_conflicts(actions: &[Action], remote: &BTreeMap<RelPath, Etag>) -> Result<(), Rejection> {
@@ -290,29 +292,32 @@ fn check_conflicts(actions: &[Action], remote: &BTreeMap<RelPath, Etag>) -> Resu
 }
 
 fn check_mass_change(actions: &[Action], context: &Context) -> Result<(), Rejection> {
-    let mut files: Vec<Destruction> = actions.iter().filter_map(Action::destruction).collect();
+    let mut files: Vec<Change> = actions.iter().filter_map(Action::change).collect();
     files.sort();
     files.dedup();
-    let count = u64::try_from(files.len()).unwrap_or(u64::MAX);
+    let summary = MassChangeSummary {
+        files,
+        recent: context.recent,
+        total: context.synced_count,
+    };
     let limits = context.limits;
-    let total = context.synced_count;
-    let above_absolute = count > limits.absolute;
-    let above_share = count > limits.minimum
-        && u128::from(count) * 100 > u128::from(limits.percent) * u128::from(total);
-    if !(above_absolute || above_share) {
-        return Ok(());
-    }
-    if context
+    // A kind of change brakes only when this plan adds to it: after a busy
+    // day, an upload of new files must not ask about earlier deletions.
+    let has = |moves: bool| summary.files.iter().any(|f| f.kind.is_move() == moves);
+    let brakes = (has(false)
+        && limits
+            .destructive
+            .exceeded_by(summary.destructive(), summary.total))
+        || (has(true) && limits.moves.exceeded_by(summary.moves(), summary.total));
+    let confirmed = context
         .confirmation
         .as_ref()
-        .is_some_and(|c| files.iter().all(|f| c.files.contains(f)))
-    {
-        return Ok(());
+        .is_some_and(|c| summary.files.iter().all(|f| c.files.contains(f)));
+    if brakes && !confirmed {
+        Err(Rejection::MassChangeNeedsConfirmation(summary))
+    } else {
+        Ok(())
     }
-    Err(Rejection::MassChangeNeedsConfirmation(MassChangeSummary {
-        files,
-        total,
-    }))
 }
 
 fn check_space(actions: &[Action], context: &Context) -> Result<(), Rejection> {

@@ -31,10 +31,19 @@ rejected-conflict =
        *[other] { $count } files were also changed on another device in the meantime.
     } Nothing was overwritten; syncing will sort it out shortly and keep both versions.
 rejected-mass-change =
-    Syncing would delete or overwrite { $count ->
-        [one] one file
-       *[other] { $count } files
-    } out of { $total } at once. Please confirm this is OK before it continues.
+    { $changes ->
+        [0] {""}
+       *[other] Syncing would delete or overwrite { $changes ->
+            [one] one file
+           *[other] { $changes } files
+        } out of { $total } within a day.{" "}
+    }{ $moves ->
+        [0] {""}
+       *[other] Syncing would move { $moves ->
+            [one] one file
+           *[other] { $moves } files
+        } out of { $total } within a day.{" "}
+    }Please check the list of files and confirm before it continues.
 rejected-icloud-space =
     There is not enough space on iCloud: { $needed } needed, { $free } free. Syncing has stopped and nothing is deleted. Free up space on iCloud or buy more.
 rejected-disk-space =

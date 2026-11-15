@@ -152,7 +152,11 @@ s optimalizací. Simulace pak trvá 3 s místo 30 s.
 - **Názvy v NFD:** lokální název zůstává, jak je na disku. Na server jde
   v NFC a páruje se po normalizaci. Synchronizace uživateli nic
   nepřejmenovává.
-- **Brzda hromadných změn:** bude počítat kumulativně, například za
-  24 hodin, aby zachytila i pomalé mazání rozložené do více běhů. Přesuny
-  bude počítat zvlášť a v dotazu ukáže seznam souborů. Seznam už existuje
-  (viz výše), zbytek je další krok.
+- **Brzda hromadných změn:** počítá kumulativně v okně brzdy: posledních
+  24 hodin, ale ne před posledním potvrzením (počty dodá démon z deníku
+  v `Context::recent`). Zachytí tak i pomalé mazání rozložené do více běhů.
+  Přesuny se počítají zvlášť s vlastními, vyššími limity (500 souborů, nebo
+  více než 50 a zároveň víc než polovina): přejmenování složky je běžné,
+  stovky přesunů naráz ukazují spíš na chybu v párování. Dotaz ukazuje
+  seznam souborů (`Change`: co se s kterým souborem stane) a brzdí jen
+  tehdy, když k překročení přispívá i aktuální plán.

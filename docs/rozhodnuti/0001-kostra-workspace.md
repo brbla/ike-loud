@@ -34,13 +34,13 @@ kontrola závislostí, `cargo deny` a `cargo audit`.
 
 ## Co přijde, až bude co hlídat
 
-| Nástroj | Kdy se zapne |
-| --- | --- |
-| `cargo vendor` a `cargo vet` | s první externí závislostí |
-| `cargo llvm-cov` (90 % u safety a sync) | s prvním kódem v safety a sync |
-| `cargo-mutants` u safety | s prvním pravidlem v safety |
-| Kani | s funkcí, která posuzuje plán akcí |
-| Deterministická simulace | milník 2 |
+| Nástroj | Kdy se zapne | Stav (2026-11-15) |
+| --- | --- | --- |
+| `cargo vendor` a `cargo vet` | s první externí závislostí | zapnuto (0007) |
+| `cargo llvm-cov` (90 % u safety a sync) | s prvním kódem v safety a sync | zapnuto pozdě, až po revizi (0013) |
+| `cargo-mutants` u safety | s prvním pravidlem v safety | zapnuto pozdě, až po revizi (0013) |
+| Kani | s funkcí, která posuzuje plán akcí | zatím ne (0013) |
+| Deterministická simulace | milník 2 | zapnuto (0011, 0012) |
 
 Zapnout tyto nástroje nad prázdnými crates by nic neověřilo a jen by
 zpomalilo CI.

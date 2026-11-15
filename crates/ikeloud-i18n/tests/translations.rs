@@ -29,7 +29,7 @@ fn keys(text: &str) -> BTreeSet<String> {
 
 /// One message for every variant the user can see.
 fn all_messages() -> Vec<Message> {
-    let c = Context::new(200);
+    let c = Context::new(200, ikeloud_sync::names::key);
     let Err(mass) = assess(
         (0..120)
             .map(|i| Action::TrashLocal {
@@ -172,6 +172,63 @@ fn english_plural_forms() {
     };
     assert!(conflict(1).starts_with("One file was"), "{}", conflict(1));
     assert!(conflict(3).starts_with("3 files were"), "{}", conflict(3));
+}
+
+#[test]
+fn mass_change_question() {
+    let question = |code: &str, changes: u64, moves: u64| {
+        lang(code).text(
+            &Message::new("rejected-mass-change")
+                .arg("changes", Value::Number(changes))
+                .arg("moves", Value::Number(moves))
+                .arg("total", Value::Number(200)),
+        )
+    };
+    let cases: &[(&str, u64, u64, &str)] = &[
+        (
+            "cs",
+            120,
+            0,
+            "Synchronizace by během dne smazala nebo přepsala 120 souborů z 200. \
+             Než bude pokračovat, zkontrolujte prosím seznam souborů a potvrďte, že je to v pořádku.",
+        ),
+        (
+            "cs",
+            0,
+            3,
+            "Synchronizace by během dne přesunula 3 soubory z 200. \
+             Než bude pokračovat, zkontrolujte prosím seznam souborů a potvrďte, že je to v pořádku.",
+        ),
+        (
+            "cs",
+            1,
+            101,
+            "Synchronizace by během dne smazala nebo přepsala jeden soubor z 200. \
+             Synchronizace by během dne přesunula 101 souborů z 200. \
+             Než bude pokračovat, zkontrolujte prosím seznam souborů a potvrďte, že je to v pořádku.",
+        ),
+        (
+            "en",
+            51,
+            0,
+            "Syncing would delete or overwrite 51 files out of 200 within a day. \
+             Please check the list of files and confirm before it continues.",
+        ),
+        (
+            "en",
+            0,
+            1,
+            "Syncing would move one file out of 200 within a day. \
+             Please check the list of files and confirm before it continues.",
+        ),
+    ];
+    for (code, changes, moves, expected) in cases {
+        assert_eq!(
+            question(code, *changes, *moves),
+            *expected,
+            "{code} {changes} {moves}"
+        );
+    }
 }
 
 #[test]

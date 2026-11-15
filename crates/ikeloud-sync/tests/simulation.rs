@@ -48,6 +48,10 @@ use ikeloud_sync::{
 
 // --- deterministic randomness ----------------------------------------------------------
 
+fn n64(n: usize) -> u64 {
+    u64::try_from(n).expect("fits in u64")
+}
+
 #[derive(Debug)]
 struct Rng(u64);
 
@@ -65,7 +69,7 @@ impl Rng {
     }
 
     fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
+        usize::try_from(self.next() % n64(n)).expect("below n")
     }
 
     fn pick<T: Clone>(&mut self, items: &[T]) -> Option<T> {
@@ -419,11 +423,11 @@ impl World {
             f.busy = false;
         }
 
-        let mut context = Context::new(self.base.len() as u64);
+        let mut context = Context::new(n64(self.base.len()), key);
         context.local_folder = LocalFolderState::Available {
-            file_count: self.local.len() as u64,
+            file_count: n64(self.local.len()),
         };
-        context.remote_item_count = self.remote.len() as u64;
+        context.remote_item_count = n64(self.remote.len());
         context.remote_etags = self
             .remote
             .iter()
@@ -927,11 +931,11 @@ fn check_all(variant: Variant) {
         "too many files skipped to be meaningful"
     );
     assert!(
-        stats.reused_inodes as u64 > seeds(),
+        n64(stats.reused_inodes) > seeds(),
         "inodes are rarely reused"
     );
     assert!(
-        stats.interleaved_steps as u64 > seeds(),
+        n64(stats.interleaved_steps) > seeds(),
         "the user rarely acts during a run"
     );
     assert!(

@@ -33,6 +33,8 @@ todo = "deny"
 unimplemented = "deny"
 indexing_slicing = "deny"
 dbg_macro = "deny"
+# `as` silently truncates or wraps; use From / TryFrom.
+as_conversions = "deny"
 print_stdout = "warn"
 print_stderr = "warn"
 

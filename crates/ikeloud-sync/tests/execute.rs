@@ -5,6 +5,7 @@
 use std::collections::VecDeque;
 
 use ikeloud_safety::{Action, ApprovedAction, Context, Decision, assess};
+use ikeloud_sync::names::key;
 use ikeloud_sync::{EffectError, Effects, Report, StopReason, Transfer, execute};
 use ikeloud_testkit::{LOCAL_SIZE, STABLE, id, p};
 
@@ -36,7 +37,7 @@ fn upload(path: &str) -> Action {
 
 /// Approved actions, through the real safety layer (the only way to get them).
 fn approved(actions: Vec<Action>) -> Vec<ApprovedAction> {
-    match assess(actions, &Context::new(0)).expect("approved") {
+    match assess(actions, &Context::new(0, key)).expect("approved") {
         Decision::Approved(plan) => plan.actions,
         Decision::NothingToDo => vec![],
     }

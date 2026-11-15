@@ -12,9 +12,10 @@ than no cache.
 ## Rules
 
 1. **Cache only what did not change.** Today that is compiled third-party
-   dependencies from `vendor/` (`target/`) and pinned tools (cargo-deny,
-   cargo-audit, cargo-vet, Java, TLC). Results (tests, clippy, TLC,
-   audits) are never cached.
+   dependencies from `vendor/` (`target/`), pinned tools (cargo-deny,
+   cargo-audit, cargo-vet, cargo-llvm-cov, cargo-mutants, Java, TLC), and
+   one result: a **passed** mutation run of `ikeloud-safety` (rule 10).
+   Other results (tests, clippy, coverage, TLC, audits) are never cached.
 2. **Our own crates are never cached.** `scripts/ci-clean-workspace.sh`
    removes their artifacts after restoring and before saving the cache.
    `scripts/check-fresh.py` fails CI if any of our crates was not compiled
@@ -39,9 +40,13 @@ than no cache.
    with a build script changed by mtimes, and a fresh checkout makes every
    file new. This is safe only because vendor/ content is in the key.
    Never apply the fixed mtime to our own sources.
-7. **Tool caches are keyed by the same script** (`--tools`): exact pinned
-   versions, the toolchain and the platform; CI checks the cached binaries
-   report the pinned versions.
+7. **Tool caches are keyed by the same script** (`--tools SET`): the name
+   of the tool set (one per CI job, so two jobs never share a key with
+   different contents), every pin (`CARGO_*_VERSION`, found by pattern),
+   the toolchain and the platform; CI checks the cached binaries report the
+   pinned versions. Pins live in the job that uses them, not at workflow
+   level: the dependency key reads `CARGO_*` variables, and a tool update
+   must not throw away the dependency cache.
 8. **Fingerprint what the artifacts depend on, not a label for it.** The
    runner image build number (`ImageVersion`) changes between runners of the
    same image without changing any tool, so it is not an input: it made the
@@ -49,6 +54,12 @@ than no cache.
    are fingerprinted directly.
 9. **The key must be deterministic.** The test computes it 21 times. Never
    pipe a multi-line command into `head` under `pipefail` (SIGPIPE race).
+10. **A result may be cached only when it is slow, and only under the
+   fingerprint of everything it depends on** (`--mutants`): the safety crate
+   with its tests, workspace manifests and lock, cargo config, toolchain,
+   build environment, the tool pin and `scripts/mutants.sh`. Only a passed
+   run is remembered; any change runs it again. The test asserts every one
+   of these inputs changes the key and other crates' code does not.
 
 ## When you change something
 

@@ -264,7 +264,12 @@ fn journal_order_limit_and_kinds() {
                 JournalKind::MovedLocal | JournalKind::MovedRemote | JournalKind::ConflictCopy
             )
             .then_some("target");
-            log(i as u64, *k, &format!("f{i}"), target)
+            log(
+                u64::try_from(i).expect("small"),
+                *k,
+                &format!("f{i}"),
+                target,
+            )
         })
         .collect();
     db.commit(&[], &all).expect("commit");

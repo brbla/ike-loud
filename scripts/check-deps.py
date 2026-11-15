@@ -67,6 +67,9 @@ def check(members, policy):
             else:
                 allowed = external
             kind = dep["kind"] or "normal"
+            # Spec: exact versions. Only our own crates (by path) have no version.
+            if not is_internal and not dep["req"].startswith("="):
+                errors.append(f"{pkg['name']}: {dep['name']} must be pinned exactly (=x.y.z), is {dep['req']}")
             if name not in allowed and dep["name"] not in allowed:
                 errors.append(f"{pkg['name']}: dependency not allowed {dep['name']} ({kind})")
             elif dep["name"] in test_only and dep["kind"] != "dev":

@@ -951,7 +951,7 @@ fn plans_pass_the_safety_layer() {
     ];
     for (name, states) in cases {
         let result = plan(&states);
-        let mut c = Context::new(states.base.len() as u64);
+        let mut c = Context::new(u64::try_from(states.base.len()).expect("small"), key);
         for r in &states.remote {
             c.remote_etags.insert(r.path.clone(), r.etag.clone());
         }

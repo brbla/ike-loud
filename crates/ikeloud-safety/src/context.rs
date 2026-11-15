@@ -40,28 +40,74 @@ pub enum Mode {
     ReadOnly(ReadOnlyReason),
 }
 
-/// Thresholds of the mass-change brake.
-///
-/// Spec: more than 50 files, or more than 10 files and at the same time more
-/// than 10 % of the synced content.
+/// When the mass-change brake stops: above `absolute` changes, or above
+/// `minimum` changes that are at the same time more than `percent` of the
+/// synced files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MassChangeLimits {
+pub struct Threshold {
     /// Above this count the brake always stops.
     pub absolute: u64,
     /// Above this count the brake stops when it is also more than `percent`.
     pub minimum: u64,
-    /// Share of the synced content in percent.
+    /// Share of the synced files in percent.
     pub percent: u64,
+}
+
+impl Threshold {
+    /// Is `count` changes out of `total` synced files above the threshold?
+    pub fn exceeded_by(self, count: u64, total: u64) -> bool {
+        count > self.absolute
+            || (count > self.minimum
+                && u128::from(count) * 100 > u128::from(self.percent) * u128::from(total))
+    }
+}
+
+/// Thresholds of the mass-change brake, counted over the brake window
+/// ([`BRAKE_WINDOW`]).
+///
+/// Spec: deleting or overwriting more than 50 files, or more than 10 files
+/// and at the same time more than 10 % of the synced content. Moves lose
+/// nothing and renaming a folder is routine, so they have their own, higher
+/// threshold: it catches a runaway rename (a wrong pairing, a bug), not the
+/// user's work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MassChangeLimits {
+    /// Deleting and overwriting.
+    pub destructive: Threshold,
+    /// Moving and renaming.
+    pub moves: Threshold,
 }
 
 impl Default for MassChangeLimits {
     fn default() -> Self {
         Self {
-            absolute: 50,
-            minimum: 10,
-            percent: 10,
+            destructive: Threshold {
+                absolute: 50,
+                minimum: 10,
+                percent: 10,
+            },
+            moves: Threshold {
+                absolute: 500,
+                minimum: 50,
+                percent: 50,
+            },
         }
     }
+}
+
+/// Over how long the brake counts changes: a deletion spread over many runs
+/// (a script deleting one file at a time) is as dangerous as one at once.
+pub const BRAKE_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Changes already carried out in the brake window: the last
+/// [`BRAKE_WINDOW`], but not before the user last confirmed a mass change
+/// (the daemon counts them from the journal).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RecentChanges {
+    /// Files deleted or overwritten.
+    pub destructive: u64,
+    /// Files moved or renamed.
+    pub moves: u64,
 }
 
 /// How long a file must stay unchanged before it is uploaded.
@@ -82,6 +128,8 @@ pub struct Context {
     pub mode: Mode,
     /// Brake thresholds.
     pub limits: MassChangeLimits,
+    /// Changes already carried out in the brake window.
+    pub recent: RecentChanges,
     /// The user's confirmation of a mass change, if any.
     pub confirmation: Option<MassChangeConfirmation>,
     /// Free space on iCloud in bytes, if known.
@@ -90,12 +138,18 @@ pub struct Context {
     pub disk_free: Option<u64>,
     /// How long a file must be unchanged before upload.
     pub settle_time: Duration,
+    /// When two names are the same name for iCloud: the engine's key (NFC
+    /// and letter case, `ikeloud_sync::names::key`). iCloud does not tell
+    /// upper and lower case apart, nor a name a Mac wrote decomposed (NFD)
+    /// from the same name composed (NFC).
+    pub name_key: fn(&str) -> String,
 }
 
 impl Context {
     /// Context for a folder and a server with the same number of files, full
-    /// mode, default limits, unknown free space.
-    pub fn new(synced_count: u64) -> Self {
+    /// mode, default limits, unknown free space. `name_key` decides when two
+    /// names are the same name (see [`Context::name_key`]).
+    pub fn new(synced_count: u64, name_key: fn(&str) -> String) -> Self {
         Self {
             local_folder: LocalFolderState::Available {
                 file_count: synced_count,
@@ -105,10 +159,12 @@ impl Context {
             remote_etags: BTreeMap::new(),
             mode: Mode::Full,
             limits: MassChangeLimits::default(),
+            recent: RecentChanges::default(),
             confirmation: None,
             icloud_free: None,
             disk_free: None,
             settle_time: DEFAULT_SETTLE_TIME,
+            name_key,
         }
     }
 }
