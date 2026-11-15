@@ -162,11 +162,7 @@ fn describe(
     );
     Ok(LocalFile {
         path: rel,
-        id: LocalId {
-            device: after.dev(),
-            inode: after.ino(),
-            birth_ns: after.created().ok().and_then(nanos_since_epoch),
-        },
+        id: local_id(&after),
         hash: ContentHash::new(ikeloud_hash::hex(&hash)),
         size: after.len(),
         stable_for: if unchanged {
@@ -201,6 +197,16 @@ fn time_from_unix(secs: i64, nanos: i64) -> Option<SystemTime> {
         UNIX_EPOCH
             .checked_sub(Duration::from_secs(secs.unsigned_abs()))?
             .checked_add(Duration::from_nanos(u64::from(nanos)))
+    }
+}
+
+/// The identity of a file from its metadata (shared with `disk.rs`, so the
+/// scanner and the checks before acting can never disagree).
+pub(crate) fn local_id(meta: &Metadata) -> LocalId {
+    LocalId {
+        device: meta.dev(),
+        inode: meta.ino(),
+        birth_ns: meta.created().ok().and_then(nanos_since_epoch),
     }
 }
 
