@@ -173,3 +173,13 @@ fn what_an_action_changes() {
     assert!(ChangeKind::MoveLocal.is_move() && ChangeKind::MoveRemote.is_move());
     assert!(!ChangeKind::TrashLocal.is_move() && !ChangeKind::OverwriteRemote.is_move());
 }
+
+#[test]
+fn the_brake_window_is_one_day() {
+    // Decided by the user (docs/rozhodnuti/0012): a deletion spread over a
+    // day is caught like one at once.
+    assert_eq!(
+        ikeloud_safety::BRAKE_WINDOW,
+        std::time::Duration::from_secs(86_400)
+    );
+}
