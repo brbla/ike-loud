@@ -45,6 +45,9 @@ jobs:
       - name: TLA+ model synchronizace (server vynucuje etag)
         run: scripts/tlc.sh SyncEtag.cfg
 
+      - name: TLA+ model přesunů
+        run: scripts/tlc.sh SyncMoves.cfg
+
   supply-chain:
     runs-on: ubuntu-24.04
     steps:

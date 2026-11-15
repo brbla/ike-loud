@@ -3,6 +3,7 @@
 #
 # Použití: scripts/tlc.sh <Model.cfg> [další volby TLC]
 # Příklad: scripts/tlc.sh SyncEtag.cfg
+# Model se bere z řádku „\* SPEC: Soubor.tla“ v konfiguraci, jinak Sync.tla.
 #
 # Java i tla2tools se stáhnou při prvním spuštění do .tools/ (není v gitu),
 # v připnutých verzích s kontrolou SHA-256. Systémová Java není potřeba.
@@ -53,5 +54,7 @@ CFG="$1"
 shift
 
 cd "$ROOT/tla"
+SPEC="$(sed -n 's/^\\\* SPEC: *\([A-Za-z0-9_]*\.tla\).*/\1/p' "$CFG" | head -n1)"
+SPEC="${SPEC:-Sync.tla}"
 exec "$JAVA" -XX:+UseParallelGC -cp "$JAR" tlc2.TLC \
-    -config "$CFG" -workers auto -deadlock -cleanup "$@" "Sync.tla"
+    -config "$CFG" -workers auto -deadlock -cleanup "$@" "$SPEC"
