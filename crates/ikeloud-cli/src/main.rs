@@ -1,3 +1,3 @@
-//! Diagnostika ike loud pro pokročilé a pro hlášení chyb.
+//! ike loud diagnostics for advanced users and bug reports.
 
 fn main() {}

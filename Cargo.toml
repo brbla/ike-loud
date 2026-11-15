@@ -22,8 +22,8 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 [workspace.lints.clippy]
-# Zadání: v produkčním kódu žádné unwrap(), expect() ani panic!.
-# V testech je povoluje clippy.toml.
+# Spec: no unwrap(), expect() or panic! in production code.
+# clippy.toml allows them in tests.
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"

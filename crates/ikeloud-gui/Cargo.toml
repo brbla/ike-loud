@@ -1,6 +1,6 @@
 [package]
 name = "ikeloud-gui"
-description = "Grafické rozhraní ike loud: průvodce, okno stavu, oznámení."
+description = "ike loud user interface: setup assistant, status window, notifications."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

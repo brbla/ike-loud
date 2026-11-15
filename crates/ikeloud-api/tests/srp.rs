@@ -1,111 +1,117 @@
-//! Testy přihlášení SRP proti vektorům z pysrp a z varianty rclone.
+//! SRP sign-in tests against vectors from pysrp and the rclone variant.
 
-#![allow(clippy::expect_used, clippy::panic)] // testovací kód smí spadnout
+#![allow(clippy::expect_used, clippy::panic)] // test code may panic
 
-#[path = "data/srp_vektory.rs"]
-mod vektory;
+#[path = "data/srp_vectors.rs"]
+mod vectors;
 
-use ikeloud_api::srp::{ChybaSrp, Protokol, SrpKlient, Zarovnani, odvod_heslo};
-use vektory::{OKRAJE, OKRAJE_HESLO_PBKDF2, OKRAJE_SALT, OKRAJE_UCET, VEKTORY};
+use ikeloud_api::srp::{Padding, Protocol, SrpClient, SrpError, derive_password};
+use vectors::{EDGE_ACCOUNT, EDGE_DERIVED, EDGE_SALT, EDGES, VECTORS};
 
-fn z_hex(s: &str) -> Vec<u8> {
+fn from_hex(s: &str) -> Vec<u8> {
     (0..s.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2).expect("sudá délka"), 16).expect("hex"))
+        .map(|i| u8::from_str_radix(s.get(i..i + 2).expect("even length"), 16).expect("hex"))
         .collect()
 }
 
 #[test]
-fn odvozeni_hesla() {
-    for v in VEKTORY {
-        let protokol = Protokol::z_textu(v.protokol).expect("známý protokol");
-        let odvozene = odvod_heslo(v.heslo, &z_hex(v.salt), v.iterace, protokol).expect("odvození");
+fn password_derivation() {
+    for v in VECTORS {
+        let protocol = Protocol::from_name(v.protocol).expect("known protocol");
+        let derived =
+            derive_password(v.password, &from_hex(v.salt), v.iterations, protocol).expect("derive");
         assert_eq!(
-            odvozene.to_vec(),
-            z_hex(v.heslo_pbkdf2),
+            derived.to_vec(),
+            from_hex(v.derived),
             "{} {}",
-            v.ucet,
-            v.protokol
+            v.account,
+            v.protocol
         );
     }
 }
 
 #[test]
-fn s2k_a_s2k_fo_se_lisi() {
+fn s2k_and_s2k_fo_differ() {
     let salt = [1u8; 16];
-    let s2k = odvod_heslo("heslo", &salt, 10, Protokol::S2k);
-    let fo = odvod_heslo("heslo", &salt, 10, Protokol::S2kFo);
+    let s2k = derive_password("password", &salt, 10, Protocol::S2k);
+    let fo = derive_password("password", &salt, 10, Protocol::S2kFo);
     assert_ne!(s2k, fo);
 }
 
 #[test]
-fn cela_vymena_odpovida_pysrp() {
-    // U běžných vektorů jsou A, B i S plné délky, obě varianty musí dát totéž.
-    for zarovnani in [Zarovnani::NaDelkuSkupiny, Zarovnani::BezUvodnichNul] {
-        for v in VEKTORY {
-            let klient = SrpKlient::s_tajemstvim(&z_hex(v.a), zarovnani).expect("klient");
-            assert_eq!(klient.verejne_a(), z_hex(v.verejne_a), "A {}", v.protokol);
-            let d = klient
-                .zpracuj_vyzvu(v.ucet, &z_hex(v.heslo_pbkdf2), &z_hex(v.salt), &z_hex(v.b))
-                .expect("výměna");
-            let popis = format!("{zarovnani:?} {} {}", v.ucet, v.protokol);
-            assert_eq!(d.k.to_vec(), z_hex(v.k), "K {popis}");
-            assert_eq!(d.m1.to_vec(), z_hex(v.m1), "M1 {popis}");
-            assert_eq!(d.m2.to_vec(), z_hex(v.m2), "M2 {popis}");
-        }
-    }
-}
-
-#[test]
-fn okrajove_pripady_obou_variant() {
-    for o in OKRAJE {
-        for (zarovnani, ocekavano) in [
-            (Zarovnani::BezUvodnichNul, &o.pysrp),
-            (Zarovnani::NaDelkuSkupiny, &o.rclone),
-        ] {
-            let klient = SrpKlient::s_tajemstvim(&z_hex(o.a), zarovnani).expect("klient");
-            assert_eq!(
-                klient.verejne_a(),
-                z_hex(ocekavano.verejne_a),
-                "A {} {zarovnani:?}",
-                o.popis
-            );
-            let d = klient
-                .zpracuj_vyzvu(
-                    OKRAJE_UCET,
-                    &z_hex(OKRAJE_HESLO_PBKDF2),
-                    &z_hex(OKRAJE_SALT),
-                    &z_hex(o.b),
+fn whole_exchange_matches_pysrp() {
+    // In the regular vectors A, B and S are full length; both variants must agree.
+    for padding in [Padding::GroupLength, Padding::NoLeadingZeros] {
+        for v in VECTORS {
+            let client = SrpClient::with_secret(&from_hex(v.a), padding).expect("client");
+            assert_eq!(client.public_a(), from_hex(v.public_a), "A {}", v.protocol);
+            let proof = client
+                .process_challenge(
+                    v.account,
+                    &from_hex(v.derived),
+                    &from_hex(v.salt),
+                    &from_hex(v.b),
                 )
-                .expect("výměna");
-            assert_eq!(
-                d.k.to_vec(),
-                z_hex(ocekavano.k),
-                "K {} {zarovnani:?}",
-                o.popis
-            );
-            assert_eq!(
-                d.m1.to_vec(),
-                z_hex(ocekavano.m1),
-                "M1 {} {zarovnani:?}",
-                o.popis
-            );
-            assert_eq!(
-                d.m2.to_vec(),
-                z_hex(ocekavano.m2),
-                "M2 {} {zarovnani:?}",
-                o.popis
-            );
+                .expect("exchange");
+            let name = format!("{padding:?} {} {}", v.account, v.protocol);
+            assert_eq!(proof.k.to_vec(), from_hex(v.k), "K {name}");
+            assert_eq!(proof.m1.to_vec(), from_hex(v.m1), "M1 {name}");
+            assert_eq!(proof.m2.to_vec(), from_hex(v.m2), "M2 {name}");
         }
-        // Varianty se v okrajových případech opravdu liší.
-        assert_ne!(o.pysrp.m1, o.rclone.m1, "{}", o.popis);
     }
 }
 
 #[test]
-fn chybne_vstupy() {
-    let klient = SrpKlient::s_tajemstvim(&[7u8; 32], Zarovnani::default()).expect("klient");
-    let n = z_hex(concat!(
+fn edge_cases_of_both_variants() {
+    for edge in EDGES {
+        for (padding, expected) in [
+            (Padding::NoLeadingZeros, &edge.pysrp),
+            (Padding::GroupLength, &edge.rclone),
+        ] {
+            let client = SrpClient::with_secret(&from_hex(edge.a), padding).expect("client");
+            assert_eq!(
+                client.public_a(),
+                from_hex(expected.public_a),
+                "A {} {padding:?}",
+                edge.name
+            );
+            let proof = client
+                .process_challenge(
+                    EDGE_ACCOUNT,
+                    &from_hex(EDGE_DERIVED),
+                    &from_hex(EDGE_SALT),
+                    &from_hex(edge.b),
+                )
+                .expect("exchange");
+            assert_eq!(
+                proof.k.to_vec(),
+                from_hex(expected.k),
+                "K {} {padding:?}",
+                edge.name
+            );
+            assert_eq!(
+                proof.m1.to_vec(),
+                from_hex(expected.m1),
+                "M1 {} {padding:?}",
+                edge.name
+            );
+            assert_eq!(
+                proof.m2.to_vec(),
+                from_hex(expected.m2),
+                "M2 {} {padding:?}",
+                edge.name
+            );
+        }
+        // The variants really differ in the edge cases.
+        assert_ne!(edge.pysrp.m1, edge.rclone.m1, "{}", edge.name);
+    }
+}
+
+#[test]
+fn invalid_inputs() {
+    let client = SrpClient::with_secret(&[7u8; 32], Padding::default()).expect("client");
+    let n = from_hex(concat!(
         "AC6BDB41324A9A9BF166DE5E1389582FAF72B6651987EE07FC3192943DB56050",
         "A37329CBB4A099ED8193E0757767A13DD52312AB4B03310DCD7F48A9DA04FD50",
         "E8083969EDB767B0CF6095179A163AB3661A05FBD5FAAAE82918A9962F0B93B8",
@@ -115,45 +121,48 @@ fn chybne_vstupy() {
         "AF874E7303CE53299CCC041C7BC308D82A5698F3A8D0C38271AE35F8E9DBFBB6",
         "94B5C803D89F7AE435DE236D525F54759B65E372FCD68EF20FA7111F9E4AFF73",
     ));
-    let mut nad_n = n.clone();
-    if let Some(posledni) = nad_n.last_mut() {
-        *posledni += 1;
+    let mut above_n = n.clone();
+    if let Some(last) = above_n.last_mut() {
+        *last += 1;
     }
-    let pripady: Vec<(&str, Vec<u8>, ChybaSrp)> = vec![
-        ("B = 0", vec![0], ChybaSrp::NeplatneB),
-        ("prázdné B", vec![], ChybaSrp::NeplatneB),
-        ("B = N", n.clone(), ChybaSrp::NeplatneB),
-        ("B > N", nad_n, ChybaSrp::NeplatneB),
+    let cases: Vec<(&str, Vec<u8>, SrpError)> = vec![
+        ("B = 0", vec![0], SrpError::InvalidB),
+        ("empty B", vec![], SrpError::InvalidB),
+        ("B = N", n.clone(), SrpError::InvalidB),
+        ("B > N", above_n, SrpError::InvalidB),
     ];
-    for (popis, b, chyba) in pripady {
+    for (name, b, error) in cases {
         assert_eq!(
-            klient.zpracuj_vyzvu("u", b"p", b"s", &b),
-            Err(chyba),
-            "{popis}"
+            client.process_challenge("u", b"p", b"s", &b),
+            Err(error),
+            "{name}"
         );
     }
     assert_eq!(
-        SrpKlient::s_tajemstvim(&[0u8; 32], Zarovnani::default()).map(|_| ()),
-        Err(ChybaSrp::NeplatneTajemstvi)
+        SrpClient::with_secret(&[0u8; 32], Padding::default()).map(|_| ()),
+        Err(SrpError::InvalidSecret)
     );
     assert_eq!(
-        odvod_heslo("p", b"s", 0, Protokol::S2k),
-        Err(ChybaSrp::NulovyPocetIteraci)
+        derive_password("p", b"s", 0, Protocol::S2k),
+        Err(SrpError::ZeroIterations)
     );
     assert_eq!(
-        Protokol::z_textu("s2k_xyz"),
-        Err(ChybaSrp::NeznamyProtokol("s2k_xyz".into()))
+        Protocol::from_name("s2k_xyz"),
+        Err(SrpError::UnknownProtocol("s2k_xyz".into()))
     );
-    for p in [Protokol::S2k, Protokol::S2kFo] {
-        assert_eq!(Protokol::z_textu(p.jako_text()), Ok(p));
+    for p in [Protocol::S2k, Protocol::S2kFo] {
+        assert_eq!(Protocol::from_name(p.name()), Ok(p));
     }
 }
 
 #[test]
-fn nahodny_klient() {
-    let a = SrpKlient::new(Zarovnani::default()).expect("náhoda");
-    let b = SrpKlient::new(Zarovnani::default()).expect("náhoda");
-    assert_eq!(a.verejne_a().len(), 256);
-    assert_ne!(a.verejne_a(), b.verejne_a());
-    assert!(!format!("{a:?}").contains("a:"), "tajemství se nevypisuje");
+fn random_client() {
+    let a = SrpClient::new(Padding::default()).expect("randomness");
+    let b = SrpClient::new(Padding::default()).expect("randomness");
+    assert_eq!(a.public_a().len(), 256);
+    assert_ne!(a.public_a(), b.public_a());
+    assert!(
+        !format!("{a:?}").contains(" a:"),
+        "the secret is not printed"
+    );
 }

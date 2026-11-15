@@ -1,5 +1,6 @@
-//! Grafické rozhraní ike loud: průvodce, okno stavu, oznámení, ikona v liště.
+//! ike loud user interface: setup assistant, status window, notifications,
+//! tray icon.
 //!
-//! S démonem mluví jen přes D-Bus.
+//! Talks to the daemon over D-Bus only.
 
 fn main() {}

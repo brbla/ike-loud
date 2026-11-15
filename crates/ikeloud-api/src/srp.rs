@@ -1,27 +1,29 @@
-//! Klientská strana SRP-6a ve variantě, kterou používá přihlášení Applu.
+//! Client side of SRP-6a in the variant Apple's sign-in uses.
 //!
-//! Převzato z backendu `iclouddrive` v rclone (`api/srp.go`, MIT) a ověřeno
-//! proti knihovně pysrp, kterou používá pyicloud (MIT). Oproti RFC 5054:
+//! Ported from the `iclouddrive` backend of rclone (`api/srp.go`, MIT) and
+//! verified against the pysrp library used by pyicloud (MIT). Compared to
+//! RFC 5054:
 //!
-//! - heslo se nejdřív odvodí: PBKDF2-HMAC-SHA256(SHA256(heslo)) pro
-//!   protokol `s2k`, u `s2k_fo` se místo hashe použije jeho hex zápis;
-//! - `x = H(salt | H(":" | odvozené heslo))`, bez jména účtu;
-//! - `M1 = H(H(N) xor H(g) | H(účet) | salt | A | B | K)`, `M2 = H(A | M1 | K)`.
+//! - the password is derived first: PBKDF2-HMAC-SHA256(SHA256(password)) for
+//!   protocol `s2k`; `s2k_fo` uses the hex form of the hash instead;
+//! - `x = H(salt | H(":" | derived password))`, without the account name;
+//! - `M1 = H(H(N) xor H(g) | H(account) | salt | A | B | K)`, `M2 = H(A | M1 | K)`.
 //!
-//! Implementace se liší v jedné věci: rclone doplňuje A, B a S nulami na
-//! délku skupiny (256 bajtů), pysrp ne. Liší se to jen u ~1 % přihlášení,
-//! kdy některé z čísel vyjde kratší. Kterou variantu chce server, zjistí
-//! pokus v milníku 0; proto [`Zarovnani`].
+//! The implementations differ in one thing: rclone pads A, B and S with
+//! zeros to the group length (256 bytes), pysrp does not. It only matters in
+//! ~1 % of sign-ins, when one of the numbers comes out shorter. Which variant
+//! the server wants is found by an experiment in milestone 0; hence
+//! [`Padding`].
 //!
-//! Jediný obal knihoven `num-bigint`, `sha2`, `pbkdf2` a `getrandom`.
+//! Single wrapper of `num-bigint`, `sha2`, `pbkdf2` and `getrandom`.
 
 use num_bigint::BigUint;
 use sha2::{Digest, Sha256};
 
-/// Délka čísel skupiny v bajtech (2048 bitů).
-const DELKA_SKUPINY: usize = 256;
+/// Length of group numbers in bytes (2048 bits).
+const GROUP_LEN: usize = 256;
 
-/// Prvočíslo N skupiny 2048 bitů z RFC 5054, příloha A.
+/// Prime N of the 2048-bit group from RFC 5054, appendix A.
 const N_HEX: &[u8] = b"AC6BDB41324A9A9BF166DE5E1389582FAF72B6651987EE07FC3192943DB56050\
 A37329CBB4A099ED8193E0757767A13DD52312AB4B03310DCD7F48A9DA04FD50\
 E8083969EDB767B0CF6095179A163AB3661A05FBD5FAAAE82918A9962F0B93B8\
@@ -31,30 +33,30 @@ CA97B43A23FB801676BD207A436C6481F1D2B9078717461A5B9D32E688F87748\
 AF874E7303CE53299CCC041C7BC308D82A5698F3A8D0C38271AE35F8E9DBFBB6\
 94B5C803D89F7AE435DE236D525F54759B65E372FCD68EF20FA7111F9E4AFF73";
 
-/// Generátor skupiny.
+/// Group generator.
 const G: u32 = 2;
 
-/// Způsob odvození hesla, který vrátí server v `signin/init`.
+/// Password derivation the server returns in `signin/init`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Protokol {
-    /// PBKDF2 ze SHA-256 hesla.
+pub enum Protocol {
+    /// PBKDF2 of the SHA-256 of the password.
     S2k,
-    /// PBKDF2 z hex zápisu SHA-256 hesla.
+    /// PBKDF2 of the hex form of the SHA-256 of the password.
     S2kFo,
 }
 
-impl Protokol {
-    /// Protokol podle textu ze serveru (`"s2k"`, `"s2k_fo"`).
-    pub fn z_textu(text: &str) -> Result<Self, ChybaSrp> {
+impl Protocol {
+    /// Protocol from the server text (`"s2k"`, `"s2k_fo"`).
+    pub fn from_name(text: &str) -> Result<Self, SrpError> {
         match text {
             "s2k" => Ok(Self::S2k),
             "s2k_fo" => Ok(Self::S2kFo),
-            jiny => Err(ChybaSrp::NeznamyProtokol(jiny.to_string())),
+            other => Err(SrpError::UnknownProtocol(other.to_string())),
         }
     }
 
-    /// Text, který se posílá serveru v seznamu podporovaných protokolů.
-    pub fn jako_text(self) -> &'static str {
+    /// Text sent to the server in the list of supported protocols.
+    pub fn name(self) -> &'static str {
         match self {
             Self::S2k => "s2k",
             Self::S2kFo => "s2k_fo",
@@ -62,194 +64,194 @@ impl Protokol {
     }
 }
 
-/// Jak převádět čísla na bajty v M1, M2 a K.
+/// How numbers become bytes in M1, M2 and K.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Zarovnani {
-    /// A, B a S doplněné nulami na 256 bajtů (rclone).
+pub enum Padding {
+    /// A, B and S padded with zeros to 256 bytes (rclone).
     #[default]
-    NaDelkuSkupiny,
-    /// Bez úvodních nul (pysrp).
-    BezUvodnichNul,
+    GroupLength,
+    /// Without leading zeros (pysrp).
+    NoLeadingZeros,
 }
 
-/// Chyba výpočtu SRP.
+/// SRP computation error.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ChybaSrp {
-    /// Server poslal protokol, který klient nezná.
-    NeznamyProtokol(String),
-    /// Server poslal nulový počet iterací PBKDF2.
-    NulovyPocetIteraci,
-    /// Server poslal B mimo rozsah 1..N-1 (nebo násobek N).
-    NeplatneB,
-    /// Vyšlo u = 0; podle SRP-6a se musí přihlášení přerušit.
-    NuloveU,
-    /// Tajné číslo klienta je nula.
-    NeplatneTajemstvi,
-    /// Systém nedal náhodná čísla.
-    NahodnostNedostupna,
+pub enum SrpError {
+    /// The server sent a protocol the client does not know.
+    UnknownProtocol(String),
+    /// The server sent zero PBKDF2 iterations.
+    ZeroIterations,
+    /// The server sent B outside 1..N-1 (or a multiple of N).
+    InvalidB,
+    /// u = 0; SRP-6a requires aborting the sign-in.
+    ZeroU,
+    /// The client secret is zero.
+    InvalidSecret,
+    /// The system did not provide random numbers.
+    RandomUnavailable,
 }
 
-/// Výsledek výměny, který se posílá v `signin/complete`.
+/// Result of the exchange sent in `signin/complete`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Dukaz {
-    /// Důkaz klienta M1.
+pub struct Proof {
+    /// Client proof M1.
     pub m1: [u8; 32],
-    /// Očekávaný důkaz serveru M2.
+    /// Expected server proof M2.
     pub m2: [u8; 32],
-    /// Sdílený klíč relace K.
+    /// Shared session key K.
     pub k: [u8; 32],
 }
 
-/// Odvodí heslo pro SRP podle protokolu, saltu a počtu iterací ze serveru.
-pub fn odvod_heslo(
-    heslo: &str,
+/// Derives the SRP password from the protocol, salt and iteration count from the server.
+pub fn derive_password(
+    password: &str,
     salt: &[u8],
-    iterace: u32,
-    protokol: Protokol,
-) -> Result<[u8; 32], ChybaSrp> {
-    if iterace == 0 {
-        return Err(ChybaSrp::NulovyPocetIteraci);
+    iterations: u32,
+    protocol: Protocol,
+) -> Result<[u8; 32], SrpError> {
+    if iterations == 0 {
+        return Err(SrpError::ZeroIterations);
     }
-    let hash = h(&[heslo.as_bytes()]);
-    let vstup: Vec<u8> = match protokol {
-        Protokol::S2k => hash.to_vec(),
-        Protokol::S2kFo => hex(&hash).into_bytes(),
+    let hash = h(&[password.as_bytes()]);
+    let input: Vec<u8> = match protocol {
+        Protocol::S2k => hash.to_vec(),
+        Protocol::S2kFo => hex(&hash).into_bytes(),
     };
-    let mut vystup = [0u8; 32];
-    pbkdf2::pbkdf2_hmac::<Sha256>(&vstup, salt, iterace, &mut vystup);
-    Ok(vystup)
+    let mut output = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<Sha256>(&input, salt, iterations, &mut output);
+    Ok(output)
 }
 
-/// Klient SRP pro jedno přihlášení.
-pub struct SrpKlient {
+/// SRP client for one sign-in.
+pub struct SrpClient {
     a: BigUint,
-    verejne_a: BigUint,
-    zarovnani: Zarovnani,
+    public_a: BigUint,
+    padding: Padding,
 }
 
-impl std::fmt::Debug for SrpKlient {
+impl std::fmt::Debug for SrpClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Tajné číslo se nikdy nevypisuje.
-        f.debug_struct("SrpKlient")
-            .field("zarovnani", &self.zarovnani)
+        // The secret is never printed.
+        f.debug_struct("SrpClient")
+            .field("padding", &self.padding)
             .finish_non_exhaustive()
     }
 }
 
-impl SrpKlient {
-    /// Nový klient s náhodným tajným číslem (32 bajtů jako rclone a pysrp).
-    pub fn new(zarovnani: Zarovnani) -> Result<Self, ChybaSrp> {
-        let mut tajemstvi = [0u8; 32];
-        getrandom::fill(&mut tajemstvi).map_err(|_| ChybaSrp::NahodnostNedostupna)?;
-        Self::s_tajemstvim(&tajemstvi, zarovnani)
+impl SrpClient {
+    /// New client with a random secret (32 bytes like rclone and pysrp).
+    pub fn new(padding: Padding) -> Result<Self, SrpError> {
+        let mut secret = [0u8; 32];
+        getrandom::fill(&mut secret).map_err(|_| SrpError::RandomUnavailable)?;
+        Self::with_secret(&secret, padding)
     }
 
-    /// Klient s daným tajným číslem. Pro testy a pro pokus v milníku 0.
-    pub fn s_tajemstvim(tajemstvi: &[u8], zarovnani: Zarovnani) -> Result<Self, ChybaSrp> {
-        let a = BigUint::from_bytes_be(tajemstvi);
+    /// Client with a given secret. For tests and for the milestone 0 experiment.
+    pub fn with_secret(secret: &[u8], padding: Padding) -> Result<Self, SrpError> {
+        let a = BigUint::from_bytes_be(secret);
         if a == BigUint::ZERO {
-            return Err(ChybaSrp::NeplatneTajemstvi);
+            return Err(SrpError::InvalidSecret);
         }
-        let verejne_a = BigUint::from(G).modpow(&a, &n());
+        let public_a = BigUint::from(G).modpow(&a, &n());
         Ok(Self {
             a,
-            verejne_a,
-            zarovnani,
+            public_a,
+            padding,
         })
     }
 
-    /// Veřejné číslo A, které se posílá v `signin/init`.
-    pub fn verejne_a(&self) -> Vec<u8> {
-        self.bajty(&self.verejne_a)
+    /// Public value A sent in `signin/init`.
+    pub fn public_a(&self) -> Vec<u8> {
+        self.bytes(&self.public_a)
     }
 
-    /// Spočítá důkaz z odpovědi serveru (`salt`, `b`).
-    pub fn zpracuj_vyzvu(
+    /// Computes the proof from the server response (`salt`, `b`).
+    pub fn process_challenge(
         &self,
-        ucet: &str,
-        odvozene_heslo: &[u8],
+        account: &str,
+        derived_password: &[u8],
         salt: &[u8],
         b: &[u8],
-    ) -> Result<Dukaz, ChybaSrp> {
+    ) -> Result<Proof, SrpError> {
         let n = n();
         let g = BigUint::from(G);
         let b = BigUint::from_bytes_be(b);
         if b == BigUint::ZERO || b >= n {
-            return Err(ChybaSrp::NeplatneB);
+            return Err(SrpError::InvalidB);
         }
 
-        let k = cislo(&h(&[&n.to_bytes_be(), &doplnit(&g)]));
-        let u = cislo(&h(&[&doplnit(&self.verejne_a), &doplnit(&b)]));
+        let k = number(&h(&[&n.to_bytes_be(), &pad(&g)]));
+        let u = number(&h(&[&pad(&self.public_a), &pad(&b)]));
         if u == BigUint::ZERO {
-            return Err(ChybaSrp::NuloveU);
+            return Err(SrpError::ZeroU);
         }
-        let x = cislo(&h(&[salt, &h(&[b":", odvozene_heslo])]));
+        let x = number(&h(&[salt, &h(&[b":", derived_password])]));
 
-        // S = (B - k·g^x)^(a + u·x) mod N, odečítání v modulární aritmetice.
+        // S = (B - k·g^x)^(a + u·x) mod N, subtraction in modular arithmetic.
         let kv = (k * g.modpow(&x, &n)) % &n;
-        let zaklad = (&b + &n - kv) % &n;
-        let s = zaklad.modpow(&(&self.a + &u * &x), &n);
+        let base = (&b + &n - kv) % &n;
+        let s = base.modpow(&(&self.a + &u * &x), &n);
 
-        let klic = h(&[&self.bajty(&s)]);
-        let a_bajty = self.bajty(&self.verejne_a);
-        let b_bajty = self.bajty(&b);
+        let key = h(&[&self.bytes(&s)]);
+        let a_bytes = self.bytes(&self.public_a);
+        let b_bytes = self.bytes(&b);
 
         let h_n = h(&[&n.to_bytes_be()]);
-        let h_g = h(&[&doplnit(&g)]);
+        let h_g = h(&[&pad(&g)]);
         let mut xor = [0u8; 32];
-        for (i, bajt) in xor.iter_mut().enumerate() {
-            *bajt = h_n.get(i).copied().unwrap_or(0) ^ h_g.get(i).copied().unwrap_or(0);
+        for (i, byte) in xor.iter_mut().enumerate() {
+            *byte = h_n.get(i).copied().unwrap_or(0) ^ h_g.get(i).copied().unwrap_or(0);
         }
         let m1 = h(&[
             &xor,
-            &h(&[ucet.as_bytes()]),
+            &h(&[account.as_bytes()]),
             salt,
-            &a_bajty,
-            &b_bajty,
-            &klic,
+            &a_bytes,
+            &b_bytes,
+            &key,
         ]);
-        let m2 = h(&[&a_bajty, &m1, &klic]);
-        Ok(Dukaz { m1, m2, k: klic })
+        let m2 = h(&[&a_bytes, &m1, &key]);
+        Ok(Proof { m1, m2, k: key })
     }
 
-    fn bajty(&self, cislo: &BigUint) -> Vec<u8> {
-        match self.zarovnani {
-            Zarovnani::NaDelkuSkupiny => doplnit(cislo),
-            Zarovnani::BezUvodnichNul => cislo.to_bytes_be(),
+    fn bytes(&self, value: &BigUint) -> Vec<u8> {
+        match self.padding {
+            Padding::GroupLength => pad(value),
+            Padding::NoLeadingZeros => value.to_bytes_be(),
         }
     }
 }
 
 fn n() -> BigUint {
-    // Konstanta je platný hex; prázdný výsledek by jen shodil testy.
+    // The constant is valid hex; an empty result would only fail the tests.
     BigUint::parse_bytes(N_HEX, 16).unwrap_or_default()
 }
 
-fn h(casti: &[&[u8]]) -> [u8; 32] {
+fn h(parts: &[&[u8]]) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    for cast in casti {
-        hasher.update(cast);
+    for part in parts {
+        hasher.update(part);
     }
     hasher.finalize().into()
 }
 
-fn cislo(bajty: &[u8]) -> BigUint {
-    BigUint::from_bytes_be(bajty)
+fn number(bytes: &[u8]) -> BigUint {
+    BigUint::from_bytes_be(bytes)
 }
 
-/// Číslo jako 256 bajtů s úvodními nulami.
-fn doplnit(cislo: &BigUint) -> Vec<u8> {
-    let bajty = cislo.to_bytes_be();
-    let mut vystup = vec![0u8; DELKA_SKUPINY.saturating_sub(bajty.len())];
-    vystup.extend_from_slice(&bajty);
-    vystup
+/// A number as 256 bytes with leading zeros.
+fn pad(value: &BigUint) -> Vec<u8> {
+    let bytes = value.to_bytes_be();
+    let mut output = vec![0u8; GROUP_LEN.saturating_sub(bytes.len())];
+    output.extend_from_slice(&bytes);
+    output
 }
 
-fn hex(bajty: &[u8]) -> String {
+fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
-    bajty
+    bytes
         .iter()
-        .fold(String::with_capacity(bajty.len() * 2), |mut s, b| {
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
             let _ = write!(s, "{b:02x}");
             s
         })
@@ -260,7 +262,7 @@ mod tests {
     use super::{BigUint, n};
 
     #[test]
-    fn skupina_rfc5054() {
+    fn rfc5054_group() {
         let n = n();
         assert_eq!(n.bits(), 2048);
         assert_eq!(n.to_bytes_be().first(), Some(&0xAC));

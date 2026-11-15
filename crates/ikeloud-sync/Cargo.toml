@@ -1,6 +1,6 @@
 [package]
 name = "ikeloud-sync"
-description = "Synchronizační engine: ze tří stavů sestaví plán akcí."
+description = "Sync engine: builds a plan of actions from three states."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,5 +12,5 @@ workspace = true
 
 [dependencies]
 ikeloud-safety = { path = "../ikeloud-safety" }
-# Normalizace názvů (NFC): „Příloha“ z Macu a z Linuxu je tentýž soubor. Jediný obal.
+# Name normalization (NFC): "Příloha" from a Mac and from Linux is the same file. Single wrapper.
 unicode-normalization = { version = "=0.1.25", default-features = false }

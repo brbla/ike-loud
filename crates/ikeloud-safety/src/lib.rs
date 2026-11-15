@@ -1,24 +1,25 @@
-//! Bezpečnostní vrstva ike loud.
+//! Safety layer of ike loud.
 //!
-//! Jediné místo, které smí schválit zápis na server. Posuzuje plán akcí
-//! z `ikeloud-sync` podle pravidel z kapitoly „Ochrana dat“ v zadání:
-//! akci pustí, odloží, nebo celý plán zastaví a čeká na uživatele.
-//! Schválená akce je typ [`SchvalenaAkce`], který umí vyrobit jen tento
-//! crate; zápisové funkce v `ikeloud-api` ho vyžadují.
+//! The only place allowed to approve a write to the server. It assesses the
+//! plan of actions from `ikeloud-sync` against the rules in the "Data
+//! protection" chapter of the spec: it allows an action, defers it, or stops
+//! the whole plan and waits for the user. An approved action is the type
+//! [`ApprovedAction`], which only this crate can create; write functions in
+//! `ikeloud-api` require it.
 //!
-//! Crate záměrně nepoužívá nic kromě standardní knihovny, aby ho šlo
-//! číst řádek po řádku.
+//! The crate deliberately uses nothing but the standard library so that it
+//! can be read line by line.
 
-pub mod akce;
-pub mod kontext;
-pub mod nazvy;
-pub mod posouzeni;
+pub mod action;
+pub mod assessment;
+pub mod context;
+pub mod names;
 
-pub use akce::{Akce, Cesta, Etag};
-pub use kontext::{
-    DuvodJenCteni, Kontext, LimityHromadneZmeny, Rezim, StavLokalniSlozky, VYCHOZI_DOBA_USTALENI,
+pub use action::{Action, Etag, RelPath};
+pub use assessment::{
+    ApprovedAction, ApprovedPlan, Decision, DeferReason, DeferredAction, MassChangeConfirmation,
+    MassChangeSummary, Rejection, assess,
 };
-pub use posouzeni::{
-    DuvodOdlozeni, OdlozenaAkce, PotvrzeniHromadneZmeny, Rozhodnuti, SchvalenaAkce, SchvalenyPlan,
-    SouhrnHromadneZmeny, Zamitnuti, posoudit,
+pub use context::{
+    Context, DEFAULT_SETTLE_TIME, LocalFolderState, MassChangeLimits, Mode, ReadOnlyReason,
 };

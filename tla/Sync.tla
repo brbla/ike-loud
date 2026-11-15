@@ -1,37 +1,40 @@
 -------------------------------- MODULE Sync --------------------------------
 (***************************************************************************)
-(* Model synchronizace ike loud se třemi stavy: lokální, vzdálený a       *)
-(* poslední společný (base). Odpovídá rozhodovací tabulce v zadání:       *)
+(* Sync model of ike loud with three states: local, remote and the last   *)
+(* common one (base). It follows the decision table of the spec:          *)
 (*                                                                         *)
-(*   změna jen na Linuxu  -> nahrát                                        *)
-(*   změna jen na iCloudu -> stáhnout                                      *)
-(*   změna na obou        -> iCloud vyhrává, lokální jde do konfl. kopie   *)
-(*   žádná změna          -> nic                                           *)
+(*   change only on Linux  -> upload                                       *)
+(*   change only on iCloud -> download                                     *)
+(*   change on both        -> iCloud wins, local goes to a conflict copy   *)
+(*   no change             -> nothing                                      *)
 (*                                                                         *)
-(* Obsah souboru je číslo (každá úprava dá nové), NONE = soubor neexistuje.*)
-(* Uživatel může kdykoli upravit nebo smazat soubor na kterékoli straně,   *)
-(* i uprostřed synchronizace. Démon může kdykoli spadnout.                 *)
+(* File content is a number (every edit gives a new one), NONE = no file.  *)
+(* The user may edit or delete a file on either side at any time, even in  *)
+(* the middle of a sync. The daemon may crash at any time.                 *)
 (*                                                                         *)
-(* Kroky synchronizace jednoho souboru:                                    *)
-(*   Scan   -> přečte obě strany a sestaví akci (pc = "planned")           *)
-(*   Check  -> jen když server etag NEvynucuje: ověří etag před zápisem    *)
-(*   Write  -> provede akci; když server etag vynucuje, ověří ho atomicky  *)
-(*   Commit -> uloží nový společný stav (SQLite)                           *)
-(* Pád mezi Write a Commit nechá starý base; další Scan to musí ustát.     *)
+(* Sync steps for one file:                                                *)
+(*   Scan   -> reads both sides and plans an action (pc = "planned")       *)
+(*   Check  -> only if the server does NOT enforce etags: checks the etag  *)
+(*             right before the write                                      *)
+(*   Write  -> performs the action; if the server enforces etags, the      *)
+(*             check is atomic                                             *)
+(*   Commit -> stores the new common state (SQLite)                        *)
+(* A crash between Write and Commit leaves the old base; the next Scan     *)
+(* must cope with it.                                                      *)
 (*                                                                         *)
-(* Předpoklady (v kódu je musí splnit implementace):                       *)
-(*   A1 Lokální „ověř a nahraď“ je atomické: nová verze se zapisuje do     *)
-(*      dočasného souboru a přejmenuje se, předchozí jde do historie.      *)
-(*   A2 Přesun do koše na serveru přesune skutečnou aktuální položku.      *)
-(*   A3 Konfliktní kopie je nový soubor, nic nepřepisuje.                  *)
+(* Assumptions (the implementation must meet them in code):                *)
+(*   A1 Local "check and replace" is atomic: the new version is written    *)
+(*      to a temporary file and renamed, the previous one goes to history. *)
+(*   A2 Moving to the server trash moves the actual current item.          *)
+(*   A3 A conflict copy is a new file and overwrites nothing.              *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS
-    N,             \* počet souborů
-    MaxEdits,      \* kolik uživatelských změn celkem (omezení stavového prostoru)
-    MaxCrashes,    \* kolik pádů démona celkem
-    EtagEnforced   \* TRUE = server odmítne zápis při jiném etagu
+    N,             \* number of files
+    MaxEdits,      \* total user changes (bounds the state space)
+    MaxCrashes,    \* total daemon crashes
+    EtagEnforced   \* TRUE = the server rejects a write with a different etag
 
 Files == 1..N
 NONE == 0
@@ -39,20 +42,20 @@ Actions == {"none", "upload", "delremote", "download", "dellocal", "conflict", "
 RemoteWrites == {"upload", "delremote"}
 
 VARIABLES
-    local,    \* obsah souboru na Linuxu
-    remote,   \* obsah souboru na iCloudu
-    etag,     \* verze na serveru, roste s každým zápisem
-    base,     \* poslední společný stav (SQLite)
-    kept,     \* obsah odložený stranou: koš, lokální historie, konfliktní kopie
-    edits,    \* počet uživatelských změn
-    crashes,  \* počet pádů
-    pc,       \* krok synchronizace pro každý soubor
-    snap,     \* co Scan viděl a co naplánoval
-    lost      \* duch: obsah, který zničila synchronizace (musí zůstat prázdný)
+    local,    \* file content on Linux
+    remote,   \* file content on iCloud
+    etag,     \* server version, grows with every write
+    base,     \* last common state (SQLite)
+    kept,     \* content set aside: trash, local history, conflict copies
+    edits,    \* number of user changes
+    crashes,  \* number of crashes
+    pc,       \* sync step for each file
+    snap,     \* what Scan saw and planned
+    lost      \* ghost: content destroyed by sync (must stay empty)
 
 vars == <<local, remote, etag, base, kept, edits, crashes, pc, snap, lost>>
 
-(* Rozhodovací tabulka ze zadání. *)
+(* Decision table from the spec. *)
 Plan(l, r, b) ==
     IF l = b /\ r = b THEN "none"
     ELSE IF r = b THEN (IF l = NONE THEN "delremote" ELSE "upload")
@@ -82,7 +85,7 @@ Init ==
 Fresh == N + 1 + edits
 
 ---------------------------------------------------------------------------
-(* Uživatel: úpravy a mazání na obou stranách, kdykoli. *)
+(* User: edits and deletes on both sides, at any time. *)
 
 UserLocalEdit(f) ==
     /\ edits < MaxEdits
@@ -104,7 +107,7 @@ UserRemoteEdit(f) ==
     /\ edits' = edits + 1
     /\ UNCHANGED <<local, base, kept, crashes, pc, snap, lost>>
 
-\* Smazání na iPhonu jde do „Nedávno smazané“ (není to práce synchronizace).
+\* A delete on the iPhone goes to "Recently Deleted" (not the sync's doing).
 UserRemoteDelete(f) ==
     /\ edits < MaxEdits
     /\ remote[f] # NONE
@@ -115,7 +118,7 @@ UserRemoteDelete(f) ==
     /\ UNCHANGED <<local, base, crashes, pc, snap, lost>>
 
 ---------------------------------------------------------------------------
-(* Synchronizace. *)
+(* Sync. *)
 
 Scan(f) ==
     /\ pc[f] = "idle"
@@ -130,8 +133,8 @@ Abort(f) ==
     /\ pc' = [pc EXCEPT ![f] = "idle"]
     /\ UNCHANGED <<local, remote, etag, base, kept, edits, crashes, snap, lost>>
 
-\* Bez vynuceného etagu: kontrola těsně před zápisem. Mezi ní a zápisem
-\* zůstává okno, ve kterém může přijít změna z iPhonu.
+\* Without an enforced etag: a check right before the write. Between the
+\* check and the write there is a window in which an iPhone change can land.
 Check(f) ==
     /\ pc[f] = "planned"
     /\ ~EtagEnforced
@@ -141,7 +144,7 @@ Check(f) ==
             /\ UNCHANGED <<local, remote, etag, base, kept, edits, crashes, snap, lost>>
        ELSE Abort(f)
 
-\* Zápis s vedlejšími účinky; společné části: obsah ducha `lost`, krok pc.
+\* A write with side effects; shared parts: the `lost` ghost and the pc step.
 Apply(f, l2, r2, e2, k2, nb) ==
     /\ local' = l2
     /\ remote' = r2
@@ -161,31 +164,31 @@ Write(f) ==
     /\ LET s == snap[f] IN
        CASE s.act = "upload" ->
               IF EtagEnforced /\ etag[f] # s.e THEN Abort(f)
-              \* Lokální historie uloží verzi, kterou démon zná (s.r).
+              \* Local history keeps the version the daemon knows (s.r).
               ELSE Apply(f, local,
                          [remote EXCEPT ![f] = s.l],
                          [etag EXCEPT ![f] = @ + 1],
                          kept \cup {s.r}, s.l)
          [] s.act = "delremote" ->
               IF EtagEnforced /\ etag[f] # s.e THEN Abort(f)
-              \* A2: do koše jde skutečná aktuální položka.
+              \* A2: the actual current item goes to the trash.
               ELSE Apply(f, local,
                          [remote EXCEPT ![f] = NONE],
                          [etag EXCEPT ![f] = @ + 1],
                          kept \cup {remote[f]}, NONE)
          [] s.act = "download" ->
-              \* A1: lokální soubor se nesmí změnit od Scan.
+              \* A1: the local file must not have changed since Scan.
               IF local[f] # s.l THEN Abort(f)
               ELSE Apply(f, [local EXCEPT ![f] = s.r], remote, etag,
                          kept \cup {local[f]}, s.r)
          [] s.act = "dellocal" ->
               IF local[f] # s.l THEN Abort(f)
-              \* Lokální kopie jde do koše systému.
+              \* The local copy goes to the system trash.
               ELSE Apply(f, [local EXCEPT ![f] = NONE], remote, etag,
                          kept \cup {local[f]}, NONE)
          [] s.act = "conflict" ->
               IF local[f] # s.l THEN Abort(f)
-              \* A3: lokální verze se uloží jako konfliktní kopie.
+              \* A3: the local version is kept as a conflict copy.
               ELSE Apply(f, [local EXCEPT ![f] = s.r], remote, etag,
                          kept \cup {s.l}, s.r)
          [] s.act = "adopt" ->
@@ -197,7 +200,7 @@ Commit(f) ==
     /\ pc' = [pc EXCEPT ![f] = "idle"]
     /\ UNCHANGED <<local, remote, etag, kept, edits, crashes, snap, lost>>
 
-\* Pád: rozpracované kroky se zapomenou, base zůstává z poslední transakce.
+\* Crash: steps in progress are forgotten, base stays from the last transaction.
 Crash ==
     /\ crashes < MaxCrashes
     /\ \E f \in Files : pc[f] # "idle"
@@ -217,7 +220,7 @@ Next == User \/ Crash \/ \E f \in Files : SyncStep(f)
 Spec == Init /\ [][Next]_vars /\ \A f \in Files : WF_vars(SyncStep(f))
 
 ---------------------------------------------------------------------------
-(* Vlastnosti. *)
+(* Properties. *)
 
 TypeOK ==
     /\ local \in [Files -> Nat]
@@ -226,12 +229,12 @@ TypeOK ==
     /\ pc \in [Files -> {"idle", "planned", "checked", "written"}]
     /\ \A f \in Files : snap[f].act \in Actions
 
-\* Hlavní invariant: synchronizace nikdy nezničí obsah, který není nikde jinde
-\* (na Linuxu, na iCloudu, v koši, v historii ani v konfliktní kopii).
+\* Main invariant: sync never destroys content that exists nowhere else
+\* (on Linux, on iCloud, in the trash, in history or in a conflict copy).
 NoLoss == lost = {}
 
-\* Po ustálení (uživatel přestal měnit, démon přestal padat) se obě strany
-\* shodují a společný stav sedí.
+\* Once things settle (the user stops changing, the daemon stops crashing)
+\* both sides match and the common state is right.
 Converge == <>[](\A f \in Files : local[f] = remote[f] /\ base[f] = local[f])
 
 =============================================================================

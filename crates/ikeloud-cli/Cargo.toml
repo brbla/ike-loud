@@ -1,6 +1,6 @@
 [package]
 name = "ikeloud-cli"
-description = "Diagnostika ike loud pro pokročilé a pro hlášení chyb."
+description = "ike loud diagnostics for advanced users and bug reports."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

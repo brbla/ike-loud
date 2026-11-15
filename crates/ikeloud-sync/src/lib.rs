@@ -1,13 +1,13 @@
-//! Synchronizační engine ike loud.
+//! Sync engine of ike loud.
 //!
-//! Porovná tři stavy (lokální, vzdálený, poslední společný) a sestaví plán
-//! akcí podle rozhodovací tabulky ze zadání. Sám nic neprovádí: plán předá
-//! ke schválení `ikeloud-safety`. Algoritmus odpovídá TLA+ modelu
-//! `tla/Sync.tla`.
+//! Compares three states (local, remote, last common) and builds a plan of
+//! actions following the decision table of the spec. It executes nothing
+//! itself: the plan goes to `ikeloud-safety` for approval. The algorithm
+//! matches the TLA+ model `tla/Sync.tla`.
 
-pub mod nazvy;
+pub mod names;
 pub mod plan;
-pub mod stav;
+pub mod state;
 
-pub use plan::{Kolize, Plan, Strana, sestavit_plan};
-pub use stav::{LokalniSoubor, OtiskObsahu, SpolecnyStav, Stavy, VzdalenySoubor};
+pub use plan::{Collision, Plan, Side, build_plan};
+pub use state::{BaseEntry, ContentHash, LocalFile, RemoteFile, States};

@@ -1,7 +1,7 @@
-//! Klient webových služeb iCloudu.
+//! iCloud web services client.
 //!
-//! Přihlášení (SRP-6a, 2FA, trust token, ADP), výpis složek, stahování,
-//! nahrávání a přesun do koše. Žádná synchronizační logika. Zápisové
-//! operace budou vyžadovat schválení z `ikeloud-safety`.
+//! Sign-in (SRP-6a, 2FA, trust token, ADP), folder listing, download,
+//! upload and moving to the trash. No sync logic. Write operations will
+//! require an approval from `ikeloud-safety`.
 
 pub mod srp;

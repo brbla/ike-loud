@@ -1,6 +1,6 @@
 [package]
 name = "ikeloud-daemon"
-description = "Démon ike loud: synchronizace na pozadí."
+description = "ike loud daemon: background sync."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

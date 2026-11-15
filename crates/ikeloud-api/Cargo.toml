@@ -1,6 +1,6 @@
 [package]
 name = "ikeloud-api"
-description = "Klient webových služeb iCloudu: přihlášení, výpis, přenosy, koš."
+description = "iCloud web services client: sign-in, listing, transfers, trash."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-# Přihlášení SRP-6a ve variantě Applu (src/srp.rs je obal všech čtyř).
+# SRP-6a sign-in, Apple variant (src/srp.rs wraps all four).
 num-bigint = { version = "=0.4.6", default-features = false, features = ["std"] }
 sha2 = { version = "=0.11.0", default-features = false }
 pbkdf2 = { version = "=0.13.0", default-features = false, features = ["hmac"] }

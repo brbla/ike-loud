@@ -1,6 +1,6 @@
 [package]
 name = "ikeloud-safety"
-description = "Bezpečnostní vrstva: jediné místo, které smí schválit zápis na server."
+description = "Safety layer: the only place allowed to approve a write to the server."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

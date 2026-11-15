@@ -1,4 +1,4 @@
-# Konfigurace cargo-deny: licence, zdroje, zakázané a duplicitní knihovny.
+# cargo-deny configuration: licenses, sources, banned and duplicate crates.
 
 [graph]
 all-features = true
@@ -25,7 +25,7 @@ allow = [
 [bans]
 multiple-versions = "deny"
 wildcards = "deny"
-# Vnitřní crates jsou path závislosti bez verze; workspace se nepublikuje.
+# Internal crates are path dependencies without a version; the workspace is not published.
 allow-wildcard-paths = true
 
 [sources]

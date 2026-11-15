@@ -1,5 +1,5 @@
-# Závislosti se sestavují jen z uložených zdrojů ve vendor/ (zadání: cargo vendor).
-# Obnova po změně Cargo.lock: cargo vendor --locked --versioned-dirs vendor
+# Dependencies are built only from the stored sources in vendor/ (spec: cargo vendor).
+# Refresh after changing Cargo.lock: cargo vendor --locked --versioned-dirs vendor
 
 [source.crates-io]
 replace-with = "vendored-sources"

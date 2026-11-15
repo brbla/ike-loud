@@ -1,6 +1,6 @@
 [package]
 name = "ikeloud-i18n"
-description = "Překlady ike loud: klíče zpráv a textové soubory Fluent pro libovolný jazyk."
+description = "ike loud translations: message keys and Fluent text files for any language."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 ikeloud-safety = { path = "../ikeloud-safety" }
-# Fluent (Mozilla): překlady s českými tvary množného čísla. Jediný obal.
+# Fluent (Mozilla): translations with Czech plural forms. Single wrapper.
 fluent-bundle = { version = "=0.16.0", default-features = false }
 unic-langid = { version = "=0.9.6", default-features = false }
 

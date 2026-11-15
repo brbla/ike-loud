@@ -1,14 +1,14 @@
-# Které závislosti smí který crate mít. Hlídá scripts/check-deps.py v CI.
+# Which dependencies each crate may have. Checked by scripts/check-deps.py in CI.
 #
-# Pravidla (zadání, kapitola o cizím kódu):
-# - Cizí knihovnu volá jen jeden crate, její obal. Proto se každý externí
-#   crate smí objevit v `external` nejvýš u jednoho crate z workspace.
-# - ikeloud-safety nepoužívá nic kromě standardní knihovny.
-# - Cesta na server vede jen přes ikeloud-safety: ikeloud-sync na
-#   ikeloud-api nezávisí a zápis v ikeloud-api vyžaduje schválení ze safety.
+# Rules (spec, chapter on third-party code):
+# - A third-party library is called by one crate only, its wrapper. So every
+#   external crate may appear in `external` of at most one workspace crate.
+# - ikeloud-safety uses nothing but the standard library.
+# - The path to the server goes only through ikeloud-safety: ikeloud-sync does
+#   not depend on ikeloud-api and writes in ikeloud-api need an approval from safety.
 #
-# Nová závislost = nový řádek tady se zdůvodněním v komentáři.
-# `dev` platí jen pro testy a pravidlo jednoho obalu se na něj nevztahuje.
+# New dependency = a new line here with the reason in a comment.
+# `dev` applies to tests only and the single-wrapper rule does not apply to it.
 
 [crates.ikeloud-safety]
 internal = []
@@ -17,13 +17,13 @@ dev = []
 
 [crates.ikeloud-api]
 internal = ["ikeloud-safety"]
-# SRP-6a: velká čísla, SHA-256, PBKDF2 a náhodné tajemství klienta (src/srp.rs)
+# SRP-6a: big numbers, SHA-256, PBKDF2 and the random client secret (src/srp.rs)
 external = ["num-bigint", "sha2", "pbkdf2", "getrandom"]
 dev = []
 
 [crates.ikeloud-sync]
 internal = ["ikeloud-safety"]
-# unicode-normalization: porovnání názvů po NFC (zadání, pravidla pro názvy)
+# unicode-normalization: comparing names after NFC (spec, rules for names)
 external = ["unicode-normalization"]
 dev = []
 
@@ -42,10 +42,10 @@ internal = ["ikeloud-api"]
 external = []
 dev = []
 
-# Překlady: jediný obal knihoven Fluent. Na safety závisí kvůli převodu
-# důvodů a zamítnutí na klíče zpráv; safety sama zůstává bez závislostí.
+# Translations: single wrapper of the Fluent libraries. Depends on safety to turn
+# defer reasons and rejections into message keys; safety itself has no dependencies.
 [crates.ikeloud-i18n]
 internal = ["ikeloud-safety"]
 external = ["fluent-bundle", "unic-langid"]
-# ikeloud-sync jen v testu, který ověří plánovač s přeloženým názvem kopie.
+# ikeloud-sync only in the test of the planner with a translated copy name.
 dev = ["ikeloud-sync"]

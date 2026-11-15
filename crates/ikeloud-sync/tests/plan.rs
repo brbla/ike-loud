@@ -1,469 +1,461 @@
-//! Tabulkové testy plánovače: tři stavy → akce.
+//! Table tests of the planner: three states → actions.
 
-#![allow(clippy::expect_used, clippy::panic)] // testovací kód smí spadnout
+#![allow(clippy::expect_used, clippy::panic)] // test code may panic
 
 use std::time::Duration;
 
-use ikeloud_safety::{Akce, Cesta, Etag};
+use ikeloud_safety::{Action, Etag, RelPath};
 use ikeloud_sync::{
-    Kolize, LokalniSoubor, OtiskObsahu, Plan, SpolecnyStav, Stavy, Strana, VzdalenySoubor,
-    sestavit_plan,
+    BaseEntry, Collision, ContentHash, LocalFile, Plan, RemoteFile, Side, States, build_plan,
 };
 
-// --- pomocníci --------------------------------------------------------------
+// --- helpers -----------------------------------------------------------------
 
-fn c(s: &str) -> Cesta {
-    Cesta::new(s)
+fn p(s: &str) -> RelPath {
+    RelPath::new(s)
 }
 
-fn lok(cesta: &str, otisk: &str) -> LokalniSoubor {
-    LokalniSoubor {
-        cesta: c(cesta),
-        otisk: OtiskObsahu::new(otisk),
-        velikost: 7,
-        stabilni_po: Duration::from_secs(60),
+fn local(path: &str, hash: &str) -> LocalFile {
+    LocalFile {
+        path: p(path),
+        hash: ContentHash::new(hash),
+        size: 7,
+        stable_for: Duration::from_secs(60),
     }
 }
 
-fn vzd(cesta: &str, etag: &str) -> VzdalenySoubor {
-    VzdalenySoubor {
-        cesta: c(cesta),
+fn remote(path: &str, etag: &str) -> RemoteFile {
+    RemoteFile {
+        path: p(path),
         etag: Etag::new(etag),
-        velikost: 9,
+        size: 9,
     }
 }
 
-fn spol(cesta: &str, otisk: &str, etag: &str) -> SpolecnyStav {
-    SpolecnyStav {
-        cesta: c(cesta),
-        otisk: OtiskObsahu::new(otisk),
+fn base(path: &str, hash: &str, etag: &str) -> BaseEntry {
+    BaseEntry {
+        path: p(path),
+        hash: ContentHash::new(hash),
         etag: Etag::new(etag),
     }
 }
 
-/// Název kopie podle vzoru ze zadání, s pevným datem.
-fn kopie(cesta: &Cesta, n: u32) -> Cesta {
-    let (zaklad, pripona) = match cesta.as_str().rsplit_once('.') {
-        Some((z, p)) if !z.ends_with('/') && !z.is_empty() => (z, format!(".{p}")),
-        _ => (cesta.as_str(), String::new()),
+/// Copy name following the spec's pattern, with a fixed date.
+fn copy_name(path: &RelPath, n: u32) -> RelPath {
+    let (stem, ext) = match path.as_str().rsplit_once('.') {
+        Some((s, e)) if !s.ends_with('/') && !s.is_empty() => (s, format!(".{e}")),
+        _ => (path.as_str(), String::new()),
     };
-    let cislo = if n == 1 {
+    let number = if n == 1 {
         String::new()
     } else {
         format!(" {n}")
     };
-    Cesta::new(format!(
-        "{zaklad} (konflikt Linux 2026-11-15{cislo}){pripona}"
-    ))
+    RelPath::new(format!("{stem} (Linux conflict 2026-11-15{number}){ext}"))
 }
 
-fn planuj(stavy: &Stavy) -> Plan {
-    sestavit_plan(stavy, &kopie)
+fn plan(states: &States) -> Plan {
+    build_plan(states, &copy_name)
 }
 
-fn nahrat(cesta: &str, etag: Option<&str>) -> Akce {
-    Akce::Nahrat {
-        cesta: c(cesta),
-        ocekavany_etag: etag.map(Etag::new),
-        velikost: 7,
-        stabilni_po: Duration::from_secs(60),
+fn upload(path: &str, etag: Option<&str>) -> Action {
+    Action::Upload {
+        path: p(path),
+        expected_etag: etag.map(Etag::new),
+        size: 7,
+        stable_for: Duration::from_secs(60),
     }
 }
 
-fn stahnout(cesta: &str, prepise: bool) -> Akce {
-    Akce::Stahnout {
-        cesta: c(cesta),
-        velikost: 9,
-        prepise_lokalni: prepise,
+fn download(path: &str, overwrites: bool) -> Action {
+    Action::Download {
+        path: p(path),
+        size: 9,
+        overwrites_local: overwrites,
     }
 }
 
-fn konflikt(cesta: &str, kopie: &str, stahnout_take: bool) -> Vec<Akce> {
+fn conflict(path: &str, copy: &str, download_too: bool) -> Vec<Action> {
     let mut a = vec![
-        Akce::PresunoutLokalne {
-            z: c(cesta),
-            na: c(kopie),
+        Action::MoveLocal {
+            from: p(path),
+            to: p(copy),
         },
-        Akce::NahratKonfliktniKopii {
-            cesta: c(kopie),
-            velikost: 7,
+        Action::UploadConflictCopy {
+            path: p(copy),
+            size: 7,
         },
     ];
-    if stahnout_take {
-        a.push(stahnout(cesta, false));
+    if download_too {
+        a.push(download(path, false));
     }
     a
 }
 
-// --- rozhodovací tabulka ----------------------------------------------------
+// --- decision table ---------------------------------------------------------------
 
 #[test]
-fn rozhodovaci_tabulka() {
-    // Společný stav: soubor „a“ s obsahem o1 a etagem e1.
-    // l/r: None = soubor na té straně není; o1/e1 = beze změny; o2/e2 = změna.
-    type Pripad = (
+fn decision_table() {
+    // Common state: file "a" with content h1 and etag e1.
+    // l/r: None = no file on that side; h1/e1 = unchanged; h2/e2 = changed.
+    type Case = (
         &'static str,
         Option<&'static str>,
         Option<&'static str>,
         bool,
-        Vec<Akce>,
+        Vec<Action>,
     );
-    let kopie_a = "a (konflikt Linux 2026-11-15)";
-    let pripady: Vec<Pripad> = vec![
-        ("nic se nezměnilo", Some("o1"), Some("e1"), true, vec![]),
+    let copy_a = "a (Linux conflict 2026-11-15)";
+    let cases: Vec<Case> = vec![
+        ("nothing changed", Some("h1"), Some("e1"), true, vec![]),
         (
-            "změna jen na Linuxu",
-            Some("o2"),
+            "changed only on Linux",
+            Some("h2"),
             Some("e1"),
             true,
-            vec![nahrat("a", Some("e1"))],
+            vec![upload("a", Some("e1"))],
         ),
         (
-            "změna jen na iCloudu",
-            Some("o1"),
+            "changed only on iCloud",
+            Some("h1"),
             Some("e2"),
             true,
-            vec![stahnout("a", true)],
+            vec![download("a", true)],
         ),
         (
-            "změna na obou",
-            Some("o2"),
+            "changed on both",
+            Some("h2"),
             Some("e2"),
             true,
-            konflikt("a", kopie_a, true),
+            conflict("a", copy_a, true),
         ),
         (
-            "smazáno na Linuxu",
+            "deleted on Linux",
             None,
             Some("e1"),
             true,
-            vec![Akce::PresunoutNaServeruDoKose {
-                cesta: c("a"),
-                ocekavany_etag: Etag::new("e1"),
+            vec![Action::TrashRemote {
+                path: p("a"),
+                expected_etag: Etag::new("e1"),
             }],
         ),
         (
-            "smazáno na iCloudu",
-            Some("o1"),
+            "deleted on iCloud",
+            Some("h1"),
             None,
             true,
-            vec![Akce::PresunoutLokalneDoKose { cesta: c("a") }],
+            vec![Action::TrashLocal { path: p("a") }],
         ),
-        ("smazáno na obou", None, None, true, vec![]),
+        ("deleted on both", None, None, true, vec![]),
         (
-            "smazáno na Linuxu, změna na iCloudu",
+            "deleted on Linux, changed on iCloud",
             None,
             Some("e2"),
             true,
-            vec![stahnout("a", false)],
+            vec![download("a", false)],
         ),
         (
-            "změna na Linuxu, smazáno na iCloudu",
-            Some("o2"),
+            "changed on Linux, deleted on iCloud",
+            Some("h2"),
             None,
             true,
-            konflikt("a", kopie_a, false),
+            conflict("a", copy_a, false),
         ),
-        // Bez společného stavu (soubor je nový).
+        // No common state (the file is new).
         (
-            "nový jen na Linuxu",
-            Some("o1"),
+            "new only on Linux",
+            Some("h1"),
             None,
             false,
-            vec![nahrat("a", None)],
+            vec![upload("a", None)],
         ),
         (
-            "nový jen na iCloudu",
+            "new only on iCloud",
             None,
             Some("e1"),
             false,
-            vec![stahnout("a", false)],
+            vec![download("a", false)],
         ),
         (
-            "nový na obou",
-            Some("o1"),
+            "new on both",
+            Some("h1"),
             Some("e1"),
             false,
-            konflikt("a", kopie_a, true),
+            conflict("a", copy_a, true),
         ),
     ];
-    for (popis, l, r, se_spolecnym, ocekavano) in pripady {
-        let stavy = Stavy {
-            lokalni: l.map(|o| lok("a", o)).into_iter().collect(),
-            vzdalene: r.map(|e| vzd("a", e)).into_iter().collect(),
-            spolecne: if se_spolecnym {
-                vec![spol("a", "o1", "e1")]
+    for (name, l, r, with_base, expected) in cases {
+        let states = States {
+            local: l.map(|h| local("a", h)).into_iter().collect(),
+            remote: r.map(|e| remote("a", e)).into_iter().collect(),
+            base: if with_base {
+                vec![base("a", "h1", "e1")]
             } else {
                 vec![]
             },
-            ..Stavy::default()
+            ..States::default()
         };
-        assert_eq!(planuj(&stavy).akce, ocekavano, "{popis}");
+        assert_eq!(plan(&states).actions, expected, "{name}");
     }
 }
 
 #[test]
-fn smazano_na_obou_se_zapomene() {
-    let stavy = Stavy {
-        spolecne: vec![spol("a", "o1", "e1")],
-        ..Stavy::default()
+fn deleted_on_both_is_forgotten() {
+    let states = States {
+        base: vec![base("a", "h1", "e1")],
+        ..States::default()
     };
-    let p = planuj(&stavy);
-    assert_eq!(p.akce, vec![]);
-    assert_eq!(p.zapomenout, vec![c("a")]);
+    let p2 = plan(&states);
+    assert_eq!(p2.actions, vec![]);
+    assert_eq!(p2.forget, vec![p("a")]);
 }
 
 #[test]
-fn cas_zmeny_nerozhoduje() {
-    // Jiná „stabilita“ (čas) při stejném otisku není změna.
-    let mut l = lok("a", "o1");
-    l.stabilni_po = Duration::ZERO;
-    let stavy = Stavy {
-        lokalni: vec![l],
-        vzdalene: vec![vzd("a", "e1")],
-        spolecne: vec![spol("a", "o1", "e1")],
-        ..Stavy::default()
+fn modification_time_does_not_decide() {
+    // A different "stability" (time) with the same hash is not a change.
+    let mut l = local("a", "h1");
+    l.stable_for = Duration::ZERO;
+    let states = States {
+        local: vec![l],
+        remote: vec![remote("a", "e1")],
+        base: vec![base("a", "h1", "e1")],
+        ..States::default()
     };
-    assert_eq!(planuj(&stavy).akce, vec![]);
+    assert_eq!(plan(&states).actions, vec![]);
 }
 
-// --- názvy ------------------------------------------------------------------
+// --- names --------------------------------------------------------------------------
 
 #[test]
-fn parovani_po_normalizaci() {
+fn pairing_after_normalization() {
     let nfd = "Pr\u{30c}i\u{301}loha.pdf";
-    let pripady: Vec<(&str, Stavy, Vec<Akce>)> = vec![
+    let cases: Vec<(&str, States, Vec<Action>)> = vec![
         (
-            "NFD na Linuxu a NFC na iCloudu je tentýž soubor",
-            Stavy {
-                lokalni: vec![lok(nfd, "o1")],
-                vzdalene: vec![vzd("Příloha.pdf", "e1")],
-                spolecne: vec![spol("Příloha.pdf", "o1", "e1")],
-                ..Stavy::default()
+            "NFD on Linux and NFC on iCloud is the same file",
+            States {
+                local: vec![local(nfd, "h1")],
+                remote: vec![remote("Příloha.pdf", "e1")],
+                base: vec![base("Příloha.pdf", "h1", "e1")],
+                ..States::default()
             },
             vec![],
         ),
         (
-            "jiná velikost písmen je tentýž soubor; nahrává se pod názvem ze serveru",
-            Stavy {
-                lokalni: vec![lok("foto.JPG", "o2")],
-                vzdalene: vec![vzd("Foto.jpg", "e1")],
-                spolecne: vec![spol("Foto.jpg", "o1", "e1")],
-                ..Stavy::default()
+            "different case is the same file; uploads under the server name",
+            States {
+                local: vec![local("photo.JPG", "h2")],
+                remote: vec![remote("Photo.jpg", "e1")],
+                base: vec![base("Photo.jpg", "h1", "e1")],
+                ..States::default()
             },
-            vec![nahrat("Foto.jpg", Some("e1"))],
+            vec![upload("Photo.jpg", Some("e1"))],
         ),
         (
-            "nový soubor z NFD se nahraje jako NFC",
-            Stavy {
-                lokalni: vec![lok(nfd, "o1")],
-                ..Stavy::default()
+            "a new NFD file is uploaded as NFC",
+            States {
+                local: vec![local(nfd, "h1")],
+                ..States::default()
             },
-            vec![nahrat("Příloha.pdf", None)],
+            vec![upload("Příloha.pdf", None)],
         ),
         (
-            "stažení přes lokální soubor jde na lokální název",
-            Stavy {
-                lokalni: vec![lok("foto.jpg", "o1")],
-                vzdalene: vec![vzd("Foto.jpg", "e2")],
-                spolecne: vec![spol("Foto.jpg", "o1", "e1")],
-                ..Stavy::default()
+            "download over a local file goes to the local name",
+            States {
+                local: vec![local("photo.jpg", "h1")],
+                remote: vec![remote("Photo.jpg", "e2")],
+                base: vec![base("Photo.jpg", "h1", "e1")],
+                ..States::default()
             },
-            vec![stahnout("foto.jpg", true)],
+            vec![download("photo.jpg", true)],
         ),
     ];
-    for (popis, stavy, ocekavano) in pripady {
-        assert_eq!(planuj(&stavy).akce, ocekavano, "{popis}");
+    for (name, states, expected) in cases {
+        assert_eq!(plan(&states).actions, expected, "{name}");
     }
 }
 
 #[test]
-fn kolize_na_linuxu_se_vynechaji() {
-    let stavy = Stavy {
-        lokalni: vec![lok("a.txt", "o1"), lok("A.txt", "o2"), lok("b.txt", "o3")],
-        vzdalene: vec![vzd("a.txt", "e1")],
-        spolecne: vec![spol("a.txt", "o1", "e1")],
-        ..Stavy::default()
+fn local_collisions_are_skipped() {
+    let states = States {
+        local: vec![
+            local("a.txt", "h1"),
+            local("A.txt", "h2"),
+            local("b.txt", "h3"),
+        ],
+        remote: vec![remote("a.txt", "e1")],
+        base: vec![base("a.txt", "h1", "e1")],
+        ..States::default()
     };
-    let p = planuj(&stavy);
+    let result = plan(&states);
     assert_eq!(
-        p.akce,
-        vec![nahrat("b.txt", None)],
-        "kolidující soubory se nesynchronizují"
+        result.actions,
+        vec![upload("b.txt", None)],
+        "colliding files are not synced"
     );
     assert_eq!(
-        p.kolize,
-        vec![Kolize {
-            strana: Strana::Lokalni,
-            cesty: vec![c("A.txt"), c("a.txt")]
+        result.collisions,
+        vec![Collision {
+            side: Side::Local,
+            paths: vec![p("A.txt"), p("a.txt")]
         }]
     );
 }
 
 #[test]
-fn kolize_na_serveru_se_vynechaji() {
-    let stavy = Stavy {
-        vzdalene: vec![vzd("x", "e1"), vzd("X", "e2")],
-        ..Stavy::default()
+fn remote_collisions_are_skipped() {
+    let states = States {
+        remote: vec![remote("x", "e1"), remote("X", "e2")],
+        ..States::default()
     };
-    let p = planuj(&stavy);
-    assert_eq!(p.akce, vec![]);
+    let result = plan(&states);
+    assert_eq!(result.actions, vec![]);
     assert_eq!(
-        p.kolize,
-        vec![Kolize {
-            strana: Strana::Vzdalena,
-            cesty: vec![c("X"), c("x")]
+        result.collisions,
+        vec![Collision {
+            side: Side::Remote,
+            paths: vec![p("X"), p("x")]
         }]
     );
 }
 
 #[test]
-fn ignorovane_soubory_se_neplanuji() {
-    let stavy = Stavy {
-        lokalni: vec![
-            lok(".~lock.zprava.odt#", "o"),
-            lok("a.swp", "o"),
-            lok("x.part", "o"),
+fn ignored_files_are_not_planned() {
+    let states = States {
+        local: vec![
+            local(".~lock.report.odt#", "h"),
+            local("a.swp", "h"),
+            local("x.part", "h"),
         ],
-        vzdalene: vec![vzd("fotky/.DS_Store", "e")],
-        ..Stavy::default()
+        remote: vec![remote("photos/.DS_Store", "e")],
+        ..States::default()
     };
-    assert_eq!(planuj(&stavy), Plan::default());
+    assert_eq!(plan(&states), Plan::default());
 }
 
-// --- konfliktní kopie -------------------------------------------------------
+// --- conflict copies -----------------------------------------------------------------
 
 #[test]
-fn konfliktni_kopie_dostane_volny_nazev() {
-    let stavy = Stavy {
-        lokalni: vec![
-            lok("zprava.odt", "o2"),
-            lok("zprava (konflikt Linux 2026-11-15).odt", "x"),
-        ],
-        vzdalene: vec![
-            vzd("zprava.odt", "e2"),
-            vzd("zprava (konflikt Linux 2026-11-15).odt", "y"),
-        ],
-        spolecne: vec![
-            spol("zprava.odt", "o1", "e1"),
-            spol("zprava (konflikt Linux 2026-11-15).odt", "x", "y"),
-        ],
-        ..Stavy::default()
+fn conflict_copy_gets_a_free_name() {
+    let taken = "report (Linux conflict 2026-11-15).odt";
+    let states = States {
+        local: vec![local("report.odt", "h2"), local(taken, "x")],
+        remote: vec![remote("report.odt", "e2"), remote(taken, "y")],
+        base: vec![base("report.odt", "h1", "e1"), base(taken, "x", "y")],
+        ..States::default()
     };
     assert_eq!(
-        planuj(&stavy).akce,
-        konflikt(
-            "zprava.odt",
-            "zprava (konflikt Linux 2026-11-15 2).odt",
+        plan(&states).actions,
+        conflict(
+            "report.odt",
+            "report (Linux conflict 2026-11-15 2).odt",
             true
         )
     );
 }
 
 #[test]
-fn dve_kopie_ve_stejnem_behu_se_nesrazi() {
-    // „A“ a „a“ v různých složkách, ale kopie mají jiné názvy.
-    let stavy = Stavy {
-        lokalni: vec![lok("d/a.txt", "o2"), lok("e/a.txt", "o2")],
-        vzdalene: vec![vzd("d/a.txt", "e2"), vzd("e/a.txt", "e2")],
-        spolecne: vec![spol("d/a.txt", "o1", "e1"), spol("e/a.txt", "o1", "e1")],
-        ..Stavy::default()
+fn two_copies_in_one_run_do_not_clash() {
+    let states = States {
+        local: vec![local("d/a.txt", "h2"), local("e/a.txt", "h2")],
+        remote: vec![remote("d/a.txt", "e2"), remote("e/a.txt", "e2")],
+        base: vec![base("d/a.txt", "h1", "e1"), base("e/a.txt", "h1", "e1")],
+        ..States::default()
     };
-    let p = planuj(&stavy);
-    let kopie: Vec<&Cesta> = p
-        .akce
+    let result = plan(&states);
+    let copies: Vec<&RelPath> = result
+        .actions
         .iter()
         .filter_map(|a| match a {
-            Akce::NahratKonfliktniKopii { cesta, .. } => Some(cesta),
+            Action::UploadConflictCopy { path, .. } => Some(path),
             _ => None,
         })
         .collect();
     assert_eq!(
-        kopie,
+        copies,
         vec![
-            &c("d/a (konflikt Linux 2026-11-15).txt"),
-            &c("e/a (konflikt Linux 2026-11-15).txt")
+            &p("d/a (Linux conflict 2026-11-15).txt"),
+            &p("e/a (Linux conflict 2026-11-15).txt")
         ]
     );
 }
 
-// --- složky -----------------------------------------------------------------
+// --- folders --------------------------------------------------------------------------
 
 #[test]
-fn chybejici_slozky_se_vytvori_predem() {
-    let slozka = |s: &str| Akce::VytvoritSlozkuNaServeru { cesta: c(s) };
-    let pripady: Vec<(&str, Stavy, Vec<Akce>)> = vec![
+fn missing_folders_are_created_first() {
+    let folder = |s: &str| Action::CreateRemoteFolder { path: p(s) };
+    let cases: Vec<(&str, States, Vec<Action>)> = vec![
         (
-            "nový soubor v nové hluboké složce",
-            Stavy {
-                lokalni: vec![lok("a/b/c.txt", "o")],
-                ..Stavy::default()
+            "new file in a new deep folder",
+            States {
+                local: vec![local("a/b/c.txt", "h")],
+                ..States::default()
             },
-            vec![slozka("a"), slozka("a/b"), nahrat("a/b/c.txt", None)],
+            vec![folder("a"), folder("a/b"), upload("a/b/c.txt", None)],
         ),
         (
-            "složka už na serveru je (jako složka)",
-            Stavy {
-                lokalni: vec![lok("a/b/c.txt", "o")],
-                vzdalene_slozky: vec![c("a"), c("A/B")],
-                ..Stavy::default()
+            "folder already on the server (as a folder)",
+            States {
+                local: vec![local("a/b/c.txt", "h")],
+                remote_folders: vec![p("a"), p("A/B")],
+                ..States::default()
             },
-            vec![nahrat("a/b/c.txt", None)],
+            vec![upload("a/b/c.txt", None)],
         ),
         (
-            "složka na serveru je vidět ze souboru v ní",
-            Stavy {
-                lokalni: vec![lok("a/nove.txt", "o"), lok("a/stare.txt", "x")],
-                vzdalene: vec![vzd("a/stare.txt", "e")],
-                spolecne: vec![spol("a/stare.txt", "x", "e")],
-                ..Stavy::default()
+            "server folder seen from a file inside it",
+            States {
+                local: vec![local("a/new.txt", "h"), local("a/old.txt", "x")],
+                remote: vec![remote("a/old.txt", "e")],
+                base: vec![base("a/old.txt", "x", "e")],
+                ..States::default()
             },
-            vec![nahrat("a/nove.txt", None)],
+            vec![upload("a/new.txt", None)],
         ),
         (
-            "dva soubory ve stejné nové složce, složka jednou",
-            Stavy {
-                lokalni: vec![lok("s/1", "o"), lok("s/2", "o")],
-                ..Stavy::default()
+            "two files in the same new folder, folder once",
+            States {
+                local: vec![local("s/1", "h"), local("s/2", "h")],
+                ..States::default()
             },
-            vec![slozka("s"), nahrat("s/1", None), nahrat("s/2", None)],
+            vec![folder("s"), upload("s/1", None), upload("s/2", None)],
         ),
         (
-            "přepsání existujícího souboru složku nevytváří",
-            Stavy {
-                lokalni: vec![lok("a/b.txt", "o2")],
-                vzdalene: vec![vzd("a/b.txt", "e1")],
-                spolecne: vec![spol("a/b.txt", "o1", "e1")],
-                ..Stavy::default()
+            "overwriting an existing file creates no folder",
+            States {
+                local: vec![local("a/b.txt", "h2")],
+                remote: vec![remote("a/b.txt", "e1")],
+                base: vec![base("a/b.txt", "h1", "e1")],
+                ..States::default()
             },
-            vec![nahrat("a/b.txt", Some("e1"))],
+            vec![upload("a/b.txt", Some("e1"))],
         ),
     ];
-    for (popis, stavy, ocekavano) in pripady {
-        assert_eq!(planuj(&stavy).akce, ocekavano, "{popis}");
+    for (name, states, expected) in cases {
+        assert_eq!(plan(&states).actions, expected, "{name}");
     }
 }
 
-// --- celý plán prochází bezpečnostní vrstvou -------------------------------
+// --- the whole plan passes the safety layer --------------------------------------------
 
 #[test]
-fn plan_po_zmene_na_linuxu_schvali_safety() {
-    use ikeloud_safety::{Kontext, Rozhodnuti, posoudit};
+fn plan_after_a_linux_change_passes_safety() {
+    use ikeloud_safety::{Context, Decision, assess};
 
-    let stavy = Stavy {
-        lokalni: vec![lok("a", "o2"), lok("b", "o1")],
-        vzdalene: vec![vzd("a", "e1"), vzd("b", "e1")],
-        spolecne: vec![spol("a", "o1", "e1"), spol("b", "o1", "e1")],
-        ..Stavy::default()
+    let states = States {
+        local: vec![local("a", "h2"), local("b", "h1")],
+        remote: vec![remote("a", "e1"), remote("b", "e1")],
+        base: vec![base("a", "h1", "e1"), base("b", "h1", "e1")],
+        ..States::default()
     };
-    let p = planuj(&stavy);
-    let mut k = Kontext::new(2);
-    for v in &stavy.vzdalene {
-        k.vzdalene_etagy.insert(v.cesta.clone(), v.etag.clone());
+    let result = plan(&states);
+    let mut c = Context::new(2);
+    for r in &states.remote {
+        c.remote_etags.insert(r.path.clone(), r.etag.clone());
     }
-    let Ok(Rozhodnuti::Schvaleno(s)) = posoudit(p.akce, &k) else {
-        panic!("plán měl projít");
+    let Ok(Decision::Approved(approved)) = assess(result.actions, &c) else {
+        panic!("the plan should pass");
     };
-    assert_eq!(s.akce.len(), 1);
-    assert!(s.odlozene.is_empty());
+    assert_eq!(approved.actions.len(), 1);
+    assert!(approved.deferred.is_empty());
 }

@@ -1,38 +1,40 @@
 ----------------------------- MODULE SyncMoves -----------------------------
 (***************************************************************************)
-(* Rozšíření modelu Sync o přesuny a přejmenování.                         *)
+(* Extension of the Sync model with moves and renames.                    *)
 (*                                                                         *)
-(* Soubor má identitu (lokálně inode, na serveru ID dokumentu), cestu      *)
-(* a obsah. Přesun mění jen cestu. Engine páruje strany podle identity     *)
-(* a přesun přenáší jako přesun, ne jako smazání a nové nahrání.           *)
+(* A file has an identity (inode locally, document ID on the server), a   *)
+(* path and content. A move changes only the path. The engine pairs the    *)
+(* sides by identity and carries a move over as a move, not as a delete   *)
+(* and a new upload.                                                       *)
 (*                                                                         *)
-(* Každá identita i má vyhrazenou náhradní cestu Alt(i): odpovídá názvu    *)
-(* konfliktní kopie. Uživatel ji sám nepoužívá.                            *)
+(* Every identity i has a reserved fallback path Alt(i): it stands for the *)
+(* conflict copy name. The user never uses it directly.                    *)
 (*                                                                         *)
-(* Kolize cest (iCloud vyhrává, na serveru se nikdy nic neodsouvá):        *)
-(*   - přesun nebo nový soubor ze serveru míří na lokálně obsazenou cestu: *)
-(*     lokální soubor, který tam stojí, se přejmenuje na svou Alt cestu;   *)
-(*   - lokální přesun nebo nový soubor míří na cestu obsazenou na serveru: *)
-(*     lokální soubor ustoupí na svou Alt cestu.                           *)
+(* Path collisions (iCloud wins, nothing is ever pushed aside on the       *)
+(* server):                                                                *)
+(*   - a move or new file from the server targets a locally taken path:    *)
+(*     the local file standing there is renamed to its Alt path;           *)
+(*   - a local move or new file targets a path taken on the server:        *)
+(*     the local file yields to its Alt path.                              *)
 (*                                                                         *)
-(* Server vynucuje etag (viz Sync.tla, kde je vidět, proč je to nutné).    *)
-(* Předpoklady A1–A3 jako v Sync.tla.                                      *)
+(* The server enforces etags (see Sync.tla for why this is necessary).     *)
+(* Assumptions A1–A3 as in Sync.tla.                                       *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS
-    Ids,          \* identity souborů
-    UserPaths,    \* cesty, které používá uživatel (čísla 1..k)
-    InitIds,      \* identity, které na začátku existují všude (cesta = id)
-    MaxEdits,     \* počet uživatelských změn
-    MaxCrashes    \* počet pádů démona
+    Ids,          \* file identities
+    UserPaths,    \* paths the user uses (numbers 1..k)
+    InitIds,      \* identities that exist everywhere at the start (path = id)
+    MaxEdits,     \* number of user changes
+    MaxCrashes    \* number of daemon crashes
 
 Alt(i) == 100 + i
 Absent == [p |-> 0, c |-> 0]
 Present(e) == e.p # 0
 
 VARIABLES local, remote, base, kept, edits, crashes, pc, snap, lost,
-    changes   \* duch: počet uživatelských akcí, které nejsou přesun
+    changes   \* ghost: number of user actions that are not moves
 
 vars == <<local, remote, base, kept, edits, crashes, pc, snap, lost, changes>>
 
@@ -62,7 +64,7 @@ AliveOf(l, r, k) ==
         \cup {r[i].c : i \in {j \in Ids : Present(r[j])}} \cup k)
 
 ---------------------------------------------------------------------------
-(* Uživatel. *)
+(* User. *)
 
 UserStep(side, side2, i, new) ==
     /\ edits < MaxEdits
@@ -87,7 +89,7 @@ LocalDelete(i) ==
     /\ UserStep(local, remote, i, Absent)
     /\ UNCHANGED <<base, kept, crashes, pc, snap, lost>>
 
-\* Nová identita vzniká jen tam, kde o ní nikdo neví.
+\* A new identity appears only where nobody knows about it.
 LocalCreate(i, q) ==
     /\ ~Present(local[i]) /\ ~Present(remote[i]) /\ ~Present(base[i])
     /\ q \in UserPaths /\ FreeIn(local, q)
@@ -104,7 +106,7 @@ RemoteMove(i, q) ==
     /\ UserStep(remote, local, i, [remote[i] EXCEPT !.p = q])
     /\ UNCHANGED <<base, kept, crashes, pc, snap, lost>>
 
-\* Smazání na iPhonu jde do „Nedávno smazané“.
+\* A delete on the iPhone goes to "Recently Deleted".
 RemoteDelete(i) ==
     /\ Present(remote[i])
     /\ UserStep(remote, local, i, Absent)
@@ -124,7 +126,7 @@ User ==
             LocalMove(i, q) \/ LocalCreate(i, q) \/ RemoteMove(i, q) \/ RemoteCreate(i, q)
 
 ---------------------------------------------------------------------------
-(* Plán pro jednu identitu: nejdřív obsah a existence, pak cesta. *)
+(* Plan for one identity: content and existence first, then the path. *)
 
 CChanged(x, b) == IF Present(x) /\ Present(b) THEN x.c # b.c ELSE Present(x) # Present(b)
 Moved(x, b) == Present(x) /\ Present(b) /\ x.p # b.p
@@ -143,10 +145,10 @@ Plan(l, r, b) ==
     ELSE IF lc /\ rc THEN
         (IF ~Present(l) THEN "fetch"
          ELSE IF ~Present(r) THEN "conflictgone"
-         \* Stejný obsah na obou stranách: shodu převzít, cestu podle iCloudu.
+         \* Same content on both sides: adopt it, path from iCloud.
          ELSE IF l.c = r.c THEN (IF l.p = r.p THEN "adopt" ELSE "movelocal")
          ELSE "conflict")
-    \* Obsah sedí; zbývá cesta. Při přesunu na obou stranách vyhrává iCloud.
+    \* Content matches; the path remains. If both sides moved, iCloud wins.
     ELSE IF Moved(r, b) /\ l.p # r.p THEN "movelocal"
     ELSE IF Moved(l, b) /\ l.p # r.p THEN "moveremote"
     ELSE IF l # b THEN "adopt"
@@ -160,24 +162,24 @@ Scan(i) ==
         /\ pc' = [pc EXCEPT ![i] = "planned"]
     /\ UNCHANGED <<local, remote, base, kept, edits, crashes, lost, changes>>
 
-\* Lokálně umístí identitu i na cestu q; kdo tam stojí, ustoupí na Alt.
+\* Places identity i on a local path; whoever stands there yields to Alt.
 PlaceLocal(l, i, e) ==
     IF FreeIn(l, e.p) \/ Occupant(l, e.p) = i
     THEN [l EXCEPT ![i] = e]
     ELSE LET j == Occupant(l, e.p) IN
          [l EXCEPT ![j] = [l[j] EXCEPT !.p = Alt(j)], ![i] = e]
 
-\* Výsledek zápisu: ok = FALSE znamená přerušit (stav se mezitím změnil).
+\* Result of a write: ok = FALSE means abort (the state changed meanwhile).
 Outcome(i) ==
     LET s == snap[i]
         L == local
         R == remote
         K == kept
-        lok == L[i] = s.l       \* A1: lokální soubor se od Scan nezměnil
-        rok == R[i] = s.r       \* etag na serveru sedí
+        lok == L[i] = s.l       \* A1: the local file has not changed since Scan
+        rok == R[i] = s.r       \* the server etag matches
         Res(l2, r2, k2) == [ok |-> TRUE, l |-> l2, r |-> r2, k |-> k2]
         Fail == [ok |-> FALSE, l |-> L, r |-> R, k |-> K]
-        \* Lokální soubor ustoupí na svou Alt cestu.
+        \* The local file yields to its Alt path.
         Yield == IF lok THEN Res([L EXCEPT ![i] = [L[i] EXCEPT !.p = Alt(i)]], R, K) ELSE Fail
     IN
     CASE s.act = "upload" ->
@@ -210,7 +212,7 @@ Outcome(i) ==
             ELSE Yield
       [] s.act \in {"adopt", "forget"} -> Res(L, R, K)
 
-\* Nový společný stav po zápisu: co se na obou stranách shoduje.
+\* New common state after a write: whatever matches on both sides.
 NewBase(b, l, r) ==
     IF ~Present(l) /\ ~Present(r) THEN Absent
     ELSE IF ~Present(l) \/ ~Present(r) THEN b
@@ -225,8 +227,8 @@ Write(i) ==
              /\ remote' = o.r
              /\ kept' = o.k
              /\ lost' = lost \cup (AliveOf(local, remote, kept) \ AliveOf(o.l, o.r, o.k))
-             \* Commit: nový společný stav se uloží transakčně se zápisem
-             \* pro i; pád mezi zápisem a uložením modeluje Sync.tla.
+             \* Commit: the new common state is stored in one transaction with
+             \* the write for i; a crash in between is modelled in Sync.tla.
              /\ base' = [base EXCEPT ![i] = NewBase(base[i], o.l[i], o.r[i])]
              /\ pc' = [pc EXCEPT ![i] = "idle"]
         ELSE /\ pc' = [pc EXCEPT ![i] = "idle"]
@@ -247,24 +249,25 @@ Next == User \/ Crash \/ \E i \in Ids : SyncStep(i)
 Spec == Init /\ [][Next]_vars /\ \A i \in Ids : WF_vars(SyncStep(i))
 
 ---------------------------------------------------------------------------
-(* Vlastnosti. *)
+(* Properties. *)
 
-\* Synchronizace nikdy nezničí obsah, který není nikde jinde.
+\* Sync never destroys content that exists nowhere else.
 NoLoss == lost = {}
 
-\* Na žádné straně nejsou dva soubory na stejné cestě (synchronizace
-\* nikdy nepřesune soubor přes jiný).
+\* No side ever has two files on the same path (sync never moves a file
+\* over another one).
 UniquePaths ==
     \A i, j \in Ids :
         i # j =>
             /\ (Present(local[i]) /\ Present(local[j]) => local[i].p # local[j].p)
             /\ (Present(remote[i]) /\ Present(remote[j]) => remote[i].p # remote[j].p)
 
-\* Když uživatel jen přesouvá, nic neskončí v koši, v historii ani
-\* v konfliktní kopii: přesun se nikdy nepřenese jako smazání a nahrání.
+\* When the user only moves files, nothing ends up in the trash, in history
+\* or in a conflict copy: a move is never carried over as delete + upload.
 PureMovesKeepNothing == changes = 0 => kept = {}
 
-\* Po ustálení jsou obě strany stejné, včetně cest, a společný stav sedí.
+\* Once things settle both sides are equal, paths included, and the common
+\* state is right.
 Converge == <>[](local = remote /\ base = local)
 
 =============================================================================

@@ -1,6 +1,6 @@
-//! Démon ike loud: synchronizace na pozadí.
+//! ike loud daemon: background sync.
 //!
-//! Ve Flatpaku běží přes Background portal, v nativních balíčcích jako
-//! systemd user service. S GUI mluví přes D-Bus.
+//! Runs through the Background portal in Flatpak and as a systemd user
+//! service in native packages. Talks to the GUI over D-Bus.
 
 fn main() {}

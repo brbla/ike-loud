@@ -11,7 +11,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  # Nástroje CI jsou připnuté přesně; aktualizace jen záměrně, jedna na změnu.
+  # CI tools are pinned exactly; update deliberately, one per change.
   CARGO_DENY_VERSION: 0.20.2
   CARGO_AUDIT_VERSION: 0.22.2
   CARGO_VET_VERSION: 0.10.2
@@ -22,19 +22,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Toolchain z rust-toolchain.toml
+      - name: Toolchain from rust-toolchain.toml
         run: rustup toolchain install
 
-      - name: Formát
+      - name: Format
         run: cargo fmt --all --check
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked --offline -- -D warnings
 
-      - name: Testy
+      - name: Tests
         run: cargo test --workspace --locked --offline
 
-      - name: Pravidla závislostí
+      - name: Dependency rules
         run: python3 scripts/check-deps.py
 
   tla:
@@ -42,10 +42,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: TLA+ model synchronizace (server vynucuje etag)
+      - name: TLA+ sync model (server enforces etag)
         run: scripts/tlc.sh SyncEtag.cfg
 
-      - name: TLA+ model přesunů
+      - name: TLA+ model of moves
         run: scripts/tlc.sh SyncMoves.cfg
 
   supply-chain:
@@ -53,8 +53,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Mimo repozitář: v něm .cargo/config.toml přesměruje crates.io na vendor/.
-      - name: Instalace cargo-deny, cargo-audit a cargo-vet
+      # Outside the repository: inside it .cargo/config.toml redirects crates.io to vendor/.
+      - name: Install cargo-deny, cargo-audit and cargo-vet
         working-directory: ${{ runner.temp }}
         run: |
           cargo install --locked cargo-deny --version "$CARGO_DENY_VERSION"
@@ -67,11 +67,11 @@ jobs:
       - name: cargo audit
         run: cargo audit
 
-      # Nevěříme nikomu (docs/rozhodnuti/0007): žádné cizí audity ani autoři.
-      - name: cargo vet bez cizí důvěry
+      # We trust nobody (docs/rozhodnuti/0007): no third-party audits or publishers.
+      - name: cargo vet without third-party trust
         run: |
           if grep -nE '^\[(imports|trusted)' supply-chain/config.toml supply-chain/audits.toml; then
-            echo "chyba: supply-chain obsahuje importy nebo důvěryhodné autory" >&2
+            echo "error: supply-chain contains imports or trusted publishers" >&2
             exit 1
           fi
           cargo vet --locked

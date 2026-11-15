@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Ověří závislosti crates ve workspace proti dependency-policy.toml.
+"""Checks the dependencies of workspace crates against dependency-policy.toml.
 
-Spouští se z kořene repozitáře: `python3 scripts/check-deps.py`.
-Návratový kód 0 = vše v pořádku, 1 = porušení pravidel (vypíše je).
+Run from the repository root: `python3 scripts/check-deps.py`.
+Exit code 0 = all good, 1 = rule violations (printed).
 """
 
 import json
@@ -35,18 +35,18 @@ def check(members, policy):
     names = {p["name"] for p in members}
 
     for missing in sorted(names - crates.keys()):
-        errors.append(f"{missing}: chybí v {POLICY_FILE.name}")
+        errors.append(f"{missing}: missing in {POLICY_FILE.name}")
     for extra in sorted(crates.keys() - names):
-        errors.append(f"{extra}: je v {POLICY_FILE.name}, ale ne ve workspace")
+        errors.append(f"{extra}: in {POLICY_FILE.name} but not in the workspace")
 
-    # Pravidlo jednoho obalu: externí crate smí mít povolený jen jeden člen.
+    # Single-wrapper rule: an external crate may be allowed for one member only.
     owners = defaultdict(list)
     for crate, rules in crates.items():
         for dep in rules.get("external", []):
             owners[dep].append(crate)
     for dep, who in sorted(owners.items()):
         if len(who) > 1:
-            errors.append(f"{dep}: smí ho volat jen jeden obal, povolen v {', '.join(sorted(who))}")
+            errors.append(f"{dep}: only one wrapper may call it, allowed in {', '.join(sorted(who))}")
 
     for pkg in sorted(members, key=lambda p: p["name"]):
         rules = crates.get(pkg["name"])
@@ -66,7 +66,7 @@ def check(members, policy):
                 allowed = external
             if name not in allowed and dep["name"] not in allowed:
                 kind = dep["kind"] or "normal"
-                errors.append(f"{pkg['name']}: nepovolená závislost {dep['name']} ({kind})")
+                errors.append(f"{pkg['name']}: dependency not allowed {dep['name']} ({kind})")
     return errors
 
 
@@ -75,10 +75,10 @@ def main():
         policy = tomllib.load(f)
     errors = check(load_members(), policy)
     for e in errors:
-        print(f"chyba: {e}", file=sys.stderr)
+        print(f"error: {e}", file=sys.stderr)
     if errors:
         return 1
-    print("závislosti odpovídají dependency-policy.toml")
+    print("dependencies match dependency-policy.toml")
     return 0
 
 

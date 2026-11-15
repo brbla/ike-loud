@@ -11,7 +11,7 @@ cest řeší bez přepsání a bez ztráty, pokud server vynucuje etag.
 | Konfigurace | Výsledek |
 | --- | --- |
 | `SyncMoves.cfg` (2 soubory, 3 cesty, 3 změny, bez pádu) | prošlo, 27 242 stavů; běží v CI |
-| `SyncMoves_big.cfg` (3 identity, 1 pád) | viz níže |
+| `SyncMoves_big.cfg` (3 identity, třetí může vzniknout, 1 pád) | prošlo, 112 075 stavů, 1,5 min; jen lokálně |
 
 Kontrolované vlastnosti:
 

@@ -1,73 +1,73 @@
-# Čeština – texty ike loud.
+# Czech – ike loud texts (Čeština).
 #
-# Formát Fluent: https://projectfluent.org/
-# Nový jazyk: zkopírujte složku i18n/en do i18n/<kód jazyka> (např. i18n/de)
-# a přeložte texty napravo od „=“. Klíče nalevo neměňte.
+# Fluent format: https://projectfluent.org/
+# New language: copy the folder i18n/en to i18n/<language code> (e.g. i18n/de)
+# and translate the text to the right of “=”. Do not change the keys on the left.
 
-## Aplikace
+## Application
 
-aplikace-nazev = ike loud
-aplikace-popis = Neoficiální klient pro iCloud Drive
+app-name = ike loud
+app-description = Neoficiální klient pro iCloud Drive
 
-## Velikosti
+## Sizes
 
-velikost-bajty = { $hodnota } B
-velikost-kb = { $hodnota } kB
-velikost-mb = { $hodnota } MB
-velikost-gb = { $hodnota } GB
-velikost-tb = { $hodnota } TB
-# Znak mezi celou a desetinnou částí čísla.
-oddelovac-desetin = ,
+size-bytes = { $value } B
+size-kb = { $value } kB
+size-mb = { $value } MB
+size-gb = { $value } GB
+size-tb = { $value } TB
+# Character between the integer and the decimal part of a number.
+decimal-separator = ,
 
-## Synchronizace stojí
+## Sync is stopped
 
-zamitnuti-lokalni-slozka-nedostupna =
+rejected-local-folder-unavailable =
     Složka iCloud teď není dostupná, proto synchronizace stojí. Soubory na iCloudu jsou v bezpečí. Pokud je složka na externím disku, připojte ho.
-zamitnuti-podezrely-vypis-serveru =
+rejected-suspicious-remote-listing =
     iCloud vrátil prázdný seznam souborů, i když tam soubory mají být. Synchronizace proto stojí a nic se nemaže. Zkusí to znovu za chvíli.
-zamitnuti-konflikt =
-    { $pocet ->
+rejected-conflict =
+    { $count ->
         [one] Jeden soubor se mezitím změnil i na jiném zařízení.
-        [few] { $pocet } soubory se mezitím změnily i na jiném zařízení.
-       *[other] { $pocet } souborů se mezitím změnilo i na jiném zařízení.
+        [few] { $count } soubory se mezitím změnily i na jiném zařízení.
+       *[other] { $count } souborů se mezitím změnilo i na jiném zařízení.
     } Nic se nepřepsalo; synchronizace to za chvíli vyřeší a obě verze zachová.
-zamitnuti-hromadna-zmena =
-    Synchronizace by najednou smazala nebo přepsala { $pocet ->
+rejected-mass-change =
+    Synchronizace by najednou smazala nebo přepsala { $count ->
         [one] jeden soubor
-        [few] { $pocet } soubory
-       *[other] { $pocet } souborů
-    } z { $celkem }. Než bude pokračovat, potvrďte prosím, že je to v pořádku.
-zamitnuti-malo-mista-icloud =
-    Na iCloudu není dost místa: potřeba { $potreba }, volno { $volno }. Synchronizace stojí a nic se nemaže. Uvolněte místo na iCloudu nebo si ho dokupte.
-zamitnuti-malo-mista-disk =
-    Na tomto počítači není dost místa: potřeba { $potreba }, volno { $volno }. Synchronizace stojí a nic se nemaže. Uvolněte místo na disku.
+        [few] { $count } soubory
+       *[other] { $count } souborů
+    } z { $total }. Než bude pokračovat, potvrďte prosím, že je to v pořádku.
+rejected-icloud-space =
+    Na iCloudu není dost místa: potřeba { $needed }, volno { $free }. Synchronizace stojí a nic se nemaže. Uvolněte místo na iCloudu nebo si ho dokupte.
+rejected-disk-space =
+    Na tomto počítači není dost místa: potřeba { $needed }, volno { $free }. Synchronizace stojí a nic se nemaže. Uvolněte místo na disku.
 
-## Soubor teď čeká
+## A file is waiting
 
-odlozeno-jen-cteni = Zatím se jen stahuje. { $duvod }
-odlozeno-soubor-se-zapisuje = Soubor se ještě ukládá. Nahraje se, až bude hotový.
-odlozeno-ignorovany-soubor = Dočasný soubor programu; na iCloud se nenahrává.
-odlozeno-kolize-velikosti =
-    Na iCloudu už je „{ $s }“. iCloud nerozlišuje velká a malá písmena, proto soubor přejmenujte.
-odlozeno-nazev-prazdna-cast = Název souboru nebo složky je prázdný. Soubor přejmenujte.
-odlozeno-nazev-tecka = Název „.“ ani „..“ iCloud nepřijme. Soubor přejmenujte.
-odlozeno-nazev-znak = Název obsahuje znak, který iCloud nepřijme. Soubor přejmenujte.
-odlozeno-nazev-prilis-dlouhy = Název je pro iCloud příliš dlouhý. Soubor přejmenujte.
+deferred-read-only = Zatím se jen stahuje. { $reason }
+deferred-still-being-written = Soubor se ještě ukládá. Nahraje se, až bude hotový.
+deferred-ignored = Dočasný soubor programu; na iCloud se nenahrává.
+deferred-case-collision =
+    Na iCloudu už je „{ $name }“. iCloud nerozlišuje velká a malá písmena, proto soubor přejmenujte.
+deferred-name-empty = Název souboru nebo složky je prázdný. Soubor přejmenujte.
+deferred-name-dot = Název „.“ ani „..“ iCloud nepřijme. Soubor přejmenujte.
+deferred-name-char = Název obsahuje znak, který iCloud nepřijme. Soubor přejmenujte.
+deferred-name-too-long = Název je pro iCloud příliš dlouhý. Soubor přejmenujte.
 
-## Proč se jen stahuje
+## Why it is only downloading
 
-jen-cteni-nastaveni = Zápis na iCloud je vypnutý v nastavení.
-jen-cteni-prvni-stazeni = Zápis na iCloud se zapne, až se dokončí a zkontroluje první stažení.
-jen-cteni-neznama-odpoved-api = iCloud odpověděl neočekávaně. Pro jistotu se na něj nezapisuje, dokud nevyjde opravená verze.
-jen-cteni-vzdalena-pojistka = Apple změnil iCloud. Pro jistotu se na něj nezapisuje, dokud nevyjde opravená verze.
+read-only-settings = Zápis na iCloud je vypnutý v nastavení.
+read-only-first-download = Zápis na iCloud se zapne, až se dokončí a zkontroluje první stažení.
+read-only-unknown-api = iCloud odpověděl neočekávaně. Pro jistotu se na něj nezapisuje, dokud nevyjde opravená verze.
+read-only-kill-switch = Apple změnil iCloud. Pro jistotu se na něj nezapisuje, dokud nevyjde opravená verze.
 
-## Názvy souborů
+## File names
 
-# Název konfliktní kopie souboru. $nazev je název bez přípony, $pripona
-# včetně tečky (může být prázdná), $datum ve tvaru 2026-11-15, $poradi
-# je 1 u první kopie toho dne. Nepoužívejte lomítko „/“.
-konfliktni-kopie =
-    { $nazev } ({ $poradi ->
-        [1] konflikt Linux { $datum }
-       *[other] konflikt Linux { $datum } { $poradi }
-    }){ $pripona }
+# Name of a conflict copy. $stem is the name without extension, $extension
+# includes the dot (may be empty), $date looks like 2026-11-15, $number
+# is 1 for the first copy that day. Do not use the slash “/”.
+conflict-copy-name =
+    { $stem } ({ $number ->
+        [1] konflikt Linux { $date }
+       *[other] konflikt Linux { $date } { $number }
+    }){ $extension }
