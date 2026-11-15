@@ -21,8 +21,8 @@ than no cache.
    from the current sources.
 3. **The key is the fingerprint of every input.** `scripts/ci-cache-key.sh`
    is the single place that computes it; CI never builds the key inline.
-   Inputs today: runner OS and image, full `rustc -vV`, `cargo -V`, C
-   compiler and archiver versions, every environment variable whose name
+   Inputs today: OS, full `rustc -vV`, `cargo -V`, versions of the C
+   compiler, archiver, linker and C library, every environment variable whose name
    matches a build-related pattern (`ENV_PATTERN`: `CARGO_*`, `RUST*`,
    `CC*`, `CFLAGS*`, `TARGET_*`, `HOST_*`, `PKG_CONFIG*`, `SQLITE*`, …),
    `Cargo.lock`, all manifests, `.cargo/config.toml`, `rust-toolchain.toml`,
@@ -39,8 +39,16 @@ than no cache.
    with a build script changed by mtimes, and a fresh checkout makes every
    file new. This is safe only because vendor/ content is in the key.
    Never apply the fixed mtime to our own sources.
-7. **Tool caches are keyed by exact pinned versions, rustc and the runner
-   image**, and CI checks the cached binaries report the pinned versions.
+7. **Tool caches are keyed by the same script** (`--tools`): exact pinned
+   versions, the toolchain and the platform; CI checks the cached binaries
+   report the pinned versions.
+8. **Fingerprint what the artifacts depend on, not a label for it.** The
+   runner image build number (`ImageVersion`) changes between runners of the
+   same image without changing any tool, so it is not an input: it made the
+   cache miss at random. The tools it stands for (cc, ar, ld, libc, rustc)
+   are fingerprinted directly.
+9. **The key must be deterministic.** The test computes it 21 times. Never
+   pipe a multi-line command into `head` under `pipefail` (SIGPIPE race).
 
 ## When you change something
 

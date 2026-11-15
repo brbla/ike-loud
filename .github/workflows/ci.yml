@@ -122,12 +122,13 @@ jobs:
 
       # The tools are built with the runner's default Rust outside the
       # repository (inside it .cargo/config.toml redirects crates.io to vendor/).
-      - name: Rust version and runner image for the tool cache
-        id: rust
+      # Their cache key comes from the same script as the dependency cache.
+      - name: Fingerprint of the tool cache inputs
+        id: tools-key
         working-directory: ${{ runner.temp }}
         run: |
-          echo "rustc=$(rustc -V | tr ' ' '_')" >> "$GITHUB_OUTPUT"
-          echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+          "$GITHUB_WORKSPACE/scripts/ci-cache-key.sh" --tools --explain
+          echo "key=$("$GITHUB_WORKSPACE/scripts/ci-cache-key.sh" --tools)" >> "$GITHUB_OUTPUT"
 
       - name: Cache cargo-deny, cargo-audit and cargo-vet
         id: tools
@@ -137,7 +138,7 @@ jobs:
             ~/.cargo/bin/cargo-deny
             ~/.cargo/bin/cargo-audit
             ~/.cargo/bin/cargo-vet
-          key: supply-chain-tools-v2-${{ steps.rust.outputs.image }}-${{ steps.rust.outputs.rustc }}-deny${{ env.CARGO_DENY_VERSION }}-audit${{ env.CARGO_AUDIT_VERSION }}-vet${{ env.CARGO_VET_VERSION }}
+          key: ${{ steps.tools-key.outputs.key }}
 
       - name: Install cargo-deny, cargo-audit and cargo-vet
         if: steps.tools.outputs.cache-hit != 'true'

@@ -34,6 +34,14 @@ fake_tool() { # name, text printed by --version / -vV
 }
 
 baseline="$(cd "$REPO" && "$KEY")"
+# The key must be deterministic: compute it many times.
+for _ in $(seq 1 20); do
+    if [[ "$(cd "$REPO" && "$KEY")" != "$baseline" ]]; then
+        echo "FAIL the key is not deterministic" >&2
+        exit 1
+    fi
+done
+echo "ok   deterministic (21 runs)"
 failures=0
 
 # check NAME same|different COMMAND...  (COMMAND runs in a subshell in $REPO)
@@ -61,6 +69,7 @@ first_vendor_checksum="$(cd "$REPO" && find vendor -name .cargo-checksum.json | 
 check "repeated run" same true
 check "unrelated env var" same export SOME_UNRELATED_VARIABLE=x
 check "GitHub run id" same export GITHUB_RUN_ID=123
+check "runner image build number" same export ImageVersion=20261111.999.1
 check "our source code" same edit crates/ikeloud-safety/src/lib.rs
 check "documentation" same edit README.md
 check "Cargo.lock" different edit Cargo.lock
@@ -73,7 +82,7 @@ check "vendored crate added" different sh -c 'mkdir -p vendor/new-1.0.0 && echo 
 check "new workspace crate" different sh -c 'mkdir -p crates/new && echo "[package]" > crates/new/Cargo.toml'
 for var in RUSTFLAGS RUSTC_WRAPPER CARGO_INCREMENTAL CARGO_PROFILE_DEV_OPT_LEVEL CC CC_x86_64_unknown_linux_gnu \
     CFLAGS CFLAGS_x86_64_unknown_linux_gnu TARGET_CC HOST_CFLAGS CRATE_CC_NO_DEFAULTS AR LDFLAGS \
-    PKG_CONFIG_PATH LIBSQLITE3_FLAGS SQLITE3_LIB_DIR ImageVersion; do
+    PKG_CONFIG_PATH LIBSQLITE3_FLAGS SQLITE3_LIB_DIR ImageOS; do
     check "env $var" different export "$var=changed"
 done
 
@@ -92,6 +101,33 @@ rm "$FAKE/cargo"; fake_tool cc "cc 0.0.0-fake"
 check "C compiler version" different export PATH="$FAKE:$PATH"
 rm "$FAKE/cc"; fake_tool ar "ar 0.0.0-fake"
 check "archiver version" different export PATH="$FAKE:$PATH"
+rm "$FAKE/ar"; fake_tool ld "ld 0.0.0-fake"
+check "linker version" different export PATH="$FAKE:$PATH"
+rm "$FAKE/ld"; fake_tool ldd "ldd (fake libc) 0.0"
+check "C library version" different export PATH="$FAKE:$PATH"
+rm "$FAKE/ldd"
+
+# The tool cache key (--tools): pins, toolchain and platform change it.
+tools_baseline="$(cd "$WORK" && CARGO_DENY_VERSION=1 CARGO_AUDIT_VERSION=1 CARGO_VET_VERSION=1 "$KEY" --tools)"
+check_tools() { # name, env assignment, expected
+    local key
+    key="$(cd "$WORK" && env CARGO_DENY_VERSION=1 CARGO_AUDIT_VERSION=1 CARGO_VET_VERSION=1 "$2" "$KEY" --tools)"
+    local got=same
+    [[ "$key" != "$tools_baseline" ]] && got=different
+    if [[ "$got" == "$3" ]]; then echo "ok   tools: $1 ($got)"; else
+        echo "FAIL tools: $1: expected $3, got $got"; failures=$((failures + 1)); fi
+}
+check_tools "repeated run" "X_UNRELATED=1" same
+check_tools "runner image build number" "ImageVersion=20261111.999.1" same
+check_tools "cargo-deny pin" "CARGO_DENY_VERSION=2" different
+check_tools "cargo-audit pin" "CARGO_AUDIT_VERSION=2" different
+check_tools "cargo-vet pin" "CARGO_VET_VERSION=2" different
+check_tools "runner OS" "ImageOS=ubuntu99" different
+fake_tool rustc "rustc 0.0.0-fake"
+check_tools "rustc version" "PATH=$FAKE:$PATH" different
+rm "$FAKE/rustc"; fake_tool ldd "ldd (fake libc) 0.0"
+check_tools "C library version" "PATH=$FAKE:$PATH" different
+rm "$FAKE/ldd"
 
 if [[ $failures -gt 0 ]]; then
     echo "$failures cache key check(s) failed" >&2

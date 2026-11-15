@@ -59,3 +59,16 @@ klíč neobsahoval verzi `gcc` (kterou se překládá přibalená SQLite) ani
 proměnné jako `SQLITE_MAX_VARIABLE_NUMBER`, které čtou build skripty; obojí
 teď otisk obsahuje a test to hlídá. Náš vlastní kód se necachuje vůbec,
 protože jeho překlad trvá sekundy a spolehlivě čerstvý je jen bez cache.
+
+## Doplněk: co do otisku nepatří (2026-11-15)
+
+- **Číslo sestavení obrazu runneru (`ImageVersion`) v otisku není.** Liší se
+  mezi runnery téhož obrazu (`20261111.370.1` vs `20261111.127.1`), aniž by se
+  změnil jakýkoli nástroj, a cache nástrojů kvůli němu netrefovala. Místo něj
+  otisk obsahuje to, na čem výsledek skutečně závisí: verze C překladače,
+  `ar`, linkeru `ld` a knihovny glibc.
+- **Otisk musí být deterministický.** První verze četla první řádek výstupu
+  přes `head` při zapnutém `pipefail`; když `head` zavřel rouru dřív, než
+  nástroj dopsal, otisk se náhodně lišil. Opraveno a test ho teď počítá
+  21krát.
+- Klíč cache nástrojů počítá tentýž skript (`--tools`).
