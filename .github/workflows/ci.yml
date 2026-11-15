@@ -17,12 +17,15 @@ env:
   CARGO_AUDIT_VERSION: 0.22.2
   CARGO_VET_VERSION: 0.10.2
 
-# Caching (docs/rozhodnuti/0008):
+# Caching (docs/rozhodnuti/0008, .claude/skills/ci-cache/SKILL.md):
 # - Only things that did not change are cached: compiled third-party
-#   dependencies from vendor/ and pinned tools. Every cache key contains
-#   everything the cached content depends on, so any change makes a new key.
+#   dependencies from vendor/ and pinned tools.
+# - The dependency cache key is the fingerprint of every input of the cached
+#   artifacts, computed by scripts/ci-cache-key.sh; scripts/test-cache-key.sh
+#   proves that every input changes the key.
 # - Our own crates are never taken from the cache: their artifacts are
-#   removed after restoring and before saving (scripts/ci-clean-workspace.sh).
+#   removed after restoring and before saving, and scripts/check-fresh.py
+#   fails the build if any of them was not compiled from current sources.
 # - Exact keys only (no restore-keys), so an older cache is never reused.
 # - Test and model-checking results are never cached.
 # Actions are pinned to commit SHAs.
@@ -34,10 +37,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Toolchain from rust-toolchain.toml
-        id: toolchain
-        run: |
-          rustup toolchain install
-          echo "rustc=$(rustc -V | tr ' ' '_')" >> "$GITHUB_OUTPUT"
+        run: rustup toolchain install
 
       # Cargo decides whether a dependency with a build script changed by file
       # mtimes, and a fresh checkout makes every file new. vendor/ content is
@@ -46,15 +46,30 @@ jobs:
       - name: Fixed mtime for vendored sources
         run: find vendor -exec touch -h -d '2000-01-01T00:00:00Z' {} +
 
+      - name: Fingerprint of the dependency cache inputs
+        id: key
+        run: |
+          scripts/ci-cache-key.sh --explain | grep -v '^file vendor'
+          echo "key=$(scripts/ci-cache-key.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: The fingerprint covers every input
+        run: scripts/test-cache-key.sh
+
       - name: Restore compiled dependencies
         id: deps
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target
-          key: deps-v2-${{ runner.os }}-${{ steps.toolchain.outputs.rustc }}-${{ env.RUSTFLAGS }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.cargo/config.toml', 'rust-toolchain.toml', 'vendor/**/.cargo-checksum.json') }}
+          key: ${{ steps.key.outputs.key }}
 
       - name: Drop our own crates from the cache
         run: scripts/ci-clean-workspace.sh
+
+      - name: Build and check our crates are compiled fresh
+        run: |
+          set -o pipefail
+          cargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics \
+            | scripts/check-fresh.py ${{ steps.deps.outputs.cache-hit == 'true' && '--expect-deps-cached' || '' }}
 
       - name: Format
         run: cargo fmt --all --check
@@ -77,7 +92,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target
-          key: ${{ steps.deps.outputs.cache-primary-key }}
+          key: ${{ steps.key.outputs.key }}
 
   tla:
     runs-on: ubuntu-24.04
@@ -107,10 +122,12 @@ jobs:
 
       # The tools are built with the runner's default Rust outside the
       # repository (inside it .cargo/config.toml redirects crates.io to vendor/).
-      - name: Rust version for the tool cache
+      - name: Rust version and runner image for the tool cache
         id: rust
         working-directory: ${{ runner.temp }}
-        run: echo "rustc=$(rustc -V | tr ' ' '_')" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "rustc=$(rustc -V | tr ' ' '_')" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 
       - name: Cache cargo-deny, cargo-audit and cargo-vet
         id: tools
@@ -120,7 +137,7 @@ jobs:
             ~/.cargo/bin/cargo-deny
             ~/.cargo/bin/cargo-audit
             ~/.cargo/bin/cargo-vet
-          key: supply-chain-tools-v1-${{ runner.os }}-${{ steps.rust.outputs.rustc }}-deny${{ env.CARGO_DENY_VERSION }}-audit${{ env.CARGO_AUDIT_VERSION }}-vet${{ env.CARGO_VET_VERSION }}
+          key: supply-chain-tools-v2-${{ steps.rust.outputs.image }}-${{ steps.rust.outputs.rustc }}-deny${{ env.CARGO_DENY_VERSION }}-audit${{ env.CARGO_AUDIT_VERSION }}-vet${{ env.CARGO_VET_VERSION }}
 
       - name: Install cargo-deny, cargo-audit and cargo-vet
         if: steps.tools.outputs.cache-hit != 'true'

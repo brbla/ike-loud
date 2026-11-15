@@ -32,3 +32,30 @@ Náš vlastní kód se testuje vždy v aktuální podobě.
 - `CARGO_INCREMENTAL=0`: v CI se nepoužívá inkrementální překlad.
 - Akce GitHubu jsou připnuté na commit (`actions/checkout` v7.0.1,
   `actions/cache` v6.1.0), ne na pohyblivý tag.
+
+## Doplněk: otisk vstupů jako testovaná součást (2026-11-15)
+
+Na návrh vlastníka projektu je invalidace cache součástí testů a má vlastní
+skill (`.claude/skills/ci-cache/SKILL.md`).
+
+- **Otisk počítá jeden skript**, `scripts/ci-cache-key.sh`; CI klíč nepočítá
+  samo. Vstupy: obraz runneru, celé `rustc -vV`, `cargo -V`, verze C překladače
+  a `ar`, všechny proměnné prostředí podle vzorů (`CARGO_*`, `RUST*`, `CC*`,
+  `CFLAGS*`, `TARGET_*`, `PKG_CONFIG*`, `SQLITE*` …), `Cargo.lock`, manifesty,
+  `.cargo/config.toml`, `rust-toolchain.toml` a součty všech knihoven ve
+  `vendor/`.
+- **Otisk je testovaný** (`scripts/test-cache-key.sh`, běží v CI): změna
+  každého vstupu musí otisk změnit; změna našeho kódu, dokumentace nebo
+  nesouvisející proměnné ho změnit nesmí. Test sám najde všechny proměnné,
+  které sledují build skripty ve `vendor/`.
+- **Čerstvost se kontroluje v každém běhu** (`scripts/check-fresh.py`): CI
+  selže, pokud se některý náš crate nepřeložil z aktuálních zdrojů.
+- Obě kontroly jsou ověřené i opačně: po vyřazení vstupu z otisku test
+  selže, bez vyčištění našich crates kontrola čerstvosti selže.
+
+Proč ne „otisk našich zdrojáků“: výsledek překladu závisí i na překladači,
+jeho přepínačích, systémovém C překladači a proměnných prostředí. Původní
+klíč neobsahoval verzi `gcc` (kterou se překládá přibalená SQLite) ani
+proměnné jako `SQLITE_MAX_VARIABLE_NUMBER`, které čtou build skripty; obojí
+teď otisk obsahuje a test to hlídá. Náš vlastní kód se necachuje vůbec,
+protože jeho překlad trvá sekundy a spolehlivě čerstvý je jen bez cache.
