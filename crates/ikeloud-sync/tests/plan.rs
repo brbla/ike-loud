@@ -619,6 +619,25 @@ fn local_collisions_are_skipped() {
 }
 
 #[test]
+fn renaming_a_known_file_into_a_collision_does_not_delete_it() {
+    // "d/e" (known, inode 5) renamed locally to "A" while "a" exists: a name
+    // collision. Found by the simulation: the file looked deleted and went
+    // to the iCloud trash.
+    let states = States {
+        local: vec![local("A", 5, "h5"), local("a", 6, "h6")],
+        remote: vec![remote("d/e", "d5", "e5"), remote("a", "d6", "e6")],
+        base: vec![
+            base("d/e", 5, "d5", "h5", "e5"),
+            base("a", 6, "d6", "h6", "e6"),
+        ],
+        ..States::default()
+    };
+    let result = plan(&states);
+    assert_eq!(result.actions, vec![], "both files are left alone");
+    assert_eq!(result.collisions.len(), 1);
+}
+
+#[test]
 fn remote_collisions_are_skipped() {
     let states = States {
         remote: vec![remote("x", "d1", "e1"), remote("X", "d2", "e2")],

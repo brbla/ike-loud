@@ -159,14 +159,34 @@ impl<'a> Planner<'a> {
             .iter()
             .flat_map(|c| c.paths.iter().map(|p| key(p.as_str())))
             .collect();
+        // Files in a name collision still exist: a known file renamed into a
+        // collision must not look deleted.
+        let blocked_inodes: BTreeSet<u64> = states
+            .local
+            .iter()
+            .filter(|f| blocked.contains(&key(f.path.as_str())))
+            .map(|f| f.inode)
+            .collect();
+        let blocked_docs: BTreeSet<&DocId> = states
+            .remote
+            .iter()
+            .filter(|f| blocked.contains(&key(f.path.as_str())))
+            .map(|f| &f.doc_id)
+            .collect();
 
         // Files known to the common state, paired by identity.
         let mut base: Vec<&BaseEntry> = states.base.iter().collect();
         base.sort_by_key(|b| key(b.path.as_str()));
         for b in base {
-            if blocked.contains(&key(b.path.as_str())) {
+            if blocked.contains(&key(b.path.as_str()))
+                || blocked_inodes.contains(&b.inode)
+                || blocked_docs.contains(&b.doc_id)
+            {
                 // A name collision: leave both sides of this file alone.
                 remote_by_doc.remove(&b.doc_id);
+                if let Some(l) = local_by_inode.remove(&b.inode) {
+                    local_by_key.remove(&key(l.path.as_str()));
+                }
                 continue;
             }
             let l = local_by_inode.get(&b.inode).copied().or_else(|| {
