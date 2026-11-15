@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Instant, SystemTime};
 
-use ikeloud_local::{Coverage, HashCache, Hint, Watcher, Watches};
+use ikeloud_local::{Coverage, HashCache, Hint, Purged, Watcher, Watches};
 use ikeloud_safety::{DeferReason, MassChangeConfirmation, Rejection};
 use ikeloud_state::{StateDb, StateError};
 
@@ -38,6 +38,9 @@ pub struct Status {
     pub coverage: Option<Coverage>,
     /// Failed runs in a row, this one included.
     pub failures: u32,
+    /// The local history purge, if this run did the daily upkeep (the
+    /// error: the history folder could not be read).
+    pub history: Option<Result<Purged, std::io::ErrorKind>>,
 }
 
 /// Starts a thread that turns inotify events of the synced folder `root` into
@@ -77,7 +80,8 @@ pub struct Daemon<'a> {
     hashes: HashCache,
     watches: Option<Watches>,
     schedule: Schedule,
-    rehashed: Instant,
+    /// When the daily upkeep was last done.
+    upkept: Option<Instant>,
     confirmation: Option<MassChangeConfirmation>,
 }
 
@@ -99,7 +103,7 @@ impl<'a> Daemon<'a> {
             hashes: HashCache::default(),
             watches,
             schedule: Schedule::new(timing, now),
-            rehashed: now,
+            upkept: None,
             confirmation: None,
         }
     }
@@ -151,10 +155,18 @@ impl<'a> Daemon<'a> {
 
     fn run_once(&mut self, remote: &mut dyn Remote) -> Status {
         let started = Instant::now();
-        if started.saturating_duration_since(self.rehashed) >= self.schedule.timing().rehash {
-            self.hashes.clear();
-            self.rehashed = started;
-        }
+        let timing = *self.schedule.timing();
+        let history = self
+            .upkept
+            .is_none_or(|t| started.saturating_duration_since(t) >= timing.upkeep)
+            .then(|| {
+                self.upkept = Some(started);
+                self.hashes.clear();
+                self.setup
+                    .disk
+                    .purge_history(SystemTime::now(), timing.keep_history)
+                    .map_err(|e| e.kind())
+            });
         // Watches first, then the scan: what changes after this is hinted,
         // what changed before it the scan sees.
         let coverage = self.watches.as_mut().map(Watches::watch_all);
@@ -177,6 +189,7 @@ impl<'a> Daemon<'a> {
             outcome,
             coverage,
             failures: self.schedule.failures(),
+            history,
         }
     }
 }

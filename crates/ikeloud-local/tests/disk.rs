@@ -231,3 +231,65 @@ fn a_download_over_a_file_keeps_the_old_version() {
         "the replaced version is in the local history"
     );
 }
+
+#[test]
+fn old_versions_leave_the_history_after_30_days() {
+    use ikeloud_local::{HISTORY_KEPT, Purged};
+    const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+    let w = World::new("purge");
+    let at = |days: u32| SystemTime::UNIX_EPOCH + DAY * days;
+    let replace = |days, content: &[u8]| {
+        let seen = w.version("a.txt");
+        w.disk
+            .write(&p("a.txt"), &mut &*content, Some(&seen), at(days))
+            .expect("write");
+    };
+    w.write("a.txt", b"v1");
+    replace(5, b"v2"); // v1 saved on day 5
+    replace(20, b"v3"); // v2 saved on day 20
+    replace(60, b"v4"); // v3 saved on day 60: "in the future" below
+    // Not ours: left alone whatever their age.
+    let history = w.dir.join("history");
+    fs::create_dir_all(history.join("notes")).expect("mkdir");
+    fs::write(history.join("1-2-3"), b"a file").expect("write");
+    let outside = w.dir.join("outside");
+    fs::create_dir_all(&outside).expect("mkdir");
+    fs::write(outside.join("keep.txt"), b"keep").expect("write");
+    std::os::unix::fs::symlink(&outside, history.join("1-2-4")).expect("symlink");
+
+    assert_eq!(
+        w.disk.purge_history(at(40), HISTORY_KEPT).expect("purge"),
+        Purged {
+            removed: 1,
+            failed: 0
+        }
+    );
+    let mut kept: Vec<Vec<u8>> = w
+        .files_in("history")
+        .iter()
+        .filter(|f| f.ends_with("/a.txt"))
+        .map(|f| fs::read(history.join(f)).expect("read"))
+        .collect();
+    kept.sort();
+    assert_eq!(kept, [b"v2".to_vec(), b"v3".to_vec()], "v1 was 35 days old");
+    assert!(history.join("notes").is_dir());
+    assert!(history.join("1-2-3").is_file());
+    assert_eq!(fs::read(outside.join("keep.txt")).expect("read"), b"keep");
+    assert!(fs::symlink_metadata(history.join("1-2-4")).is_ok());
+    assert_eq!(w.read("a.txt").as_deref(), Some(&b"v4"[..]));
+
+    // Nothing is due twice; a clock before the epoch + 30 days removes nothing.
+    assert_eq!(
+        w.disk.purge_history(at(40), HISTORY_KEPT).expect("purge"),
+        Purged::default()
+    );
+    assert_eq!(
+        w.disk.purge_history(at(10), HISTORY_KEPT).expect("purge"),
+        Purged::default()
+    );
+    let gone = LocalDisk::new(w.root(), w.dir.join("trash"), w.dir.join("no-history"));
+    assert_eq!(
+        gone.purge_history(at(40), HISTORY_KEPT).expect("purge"),
+        Purged::default()
+    );
+}

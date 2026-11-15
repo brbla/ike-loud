@@ -20,7 +20,7 @@ se testuje bez čekání.
 | Běh selhal (offline, chybí složka, databáze…) | čekání 30 s, pak 1, 2, 4… min | nejvýš 30 min |
 | Uživatel řekl „synchronizovat“ nebo potvrdil hromadnou změnu | hned (po rozestupu), i během čekání po chybě | |
 | inotify ztratil události | hned (po rozestupu) | |
-| Úplné přečtení všech souborů | jednou denně | 24 h |
+| Denní údržba: přečtení všech souborů a úklid historie (0019) | při prvním běhu, pak jednou denně | 24 h |
 
 Hodnoty jsou v `Timing::DEFAULT`. Pravidelnou kontrolu a čekání po chybách
 doladíme v milníku 0 podle toho, kolik dotazů snese účet a jestli jde levně

@@ -29,9 +29,12 @@ pub struct Timing {
     /// After a run that changed something, run again at once (after
     /// `min_gap`) to check it settled; at most this many times in a row.
     pub follow_ups: u32,
-    /// Forget every remembered hash this often: the next scan reads every
-    /// file (`ikeloud_local::HashCache`).
-    pub rehash: Duration,
+    /// Daily upkeep this often (also at the first run): forget every
+    /// remembered hash, so the next scan reads every file
+    /// (`ikeloud_local::HashCache`), and purge the local history.
+    pub upkeep: Duration,
+    /// How long replaced versions stay in the local history (spec: 30 days).
+    pub keep_history: Duration,
 }
 
 impl Timing {
@@ -45,7 +48,8 @@ impl Timing {
         retry: Duration::from_secs(30),
         retry_max: Duration::from_secs(30 * 60),
         follow_ups: 3,
-        rehash: Duration::from_secs(24 * 60 * 60),
+        upkeep: Duration::from_secs(24 * 60 * 60),
+        keep_history: ikeloud_local::HISTORY_KEPT,
     };
 }
 

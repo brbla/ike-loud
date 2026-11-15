@@ -17,6 +17,6 @@ mod disk;
 mod scan;
 mod watch;
 
-pub use disk::{DiskError, LocalDisk};
+pub use disk::{DiskError, HISTORY_KEPT, LocalDisk, Purged};
 pub use scan::{HashCache, Scan, ScanError, SkipReason, Skipped, scan, scan_with};
 pub use watch::{Coverage, Hint, Watcher, Watches};

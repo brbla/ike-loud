@@ -55,6 +55,8 @@ struct Seen {
     done: usize,
     ok: bool,
     failures: u32,
+    /// History versions purged, on runs that did the daily upkeep.
+    purged: Option<usize>,
 }
 
 fn seen(s: &Status) -> Seen {
@@ -66,6 +68,7 @@ fn seen(s: &Status) -> Seen {
         done,
         ok,
         failures: s.failures,
+        purged: s.history.map(|h| h.expect("history readable").removed),
     }
 }
 
@@ -84,6 +87,10 @@ impl Running {
         let mut fixture = Fixture::new(name);
         let dir = fixture.dir.clone();
         let db = StateDb::open_in_memory().expect("db");
+        // A version saved long ago (1970), due for the purge.
+        let old = dir.join("history/1000-1-1/old.txt");
+        std::fs::create_dir_all(old.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&old, b"old").expect("write");
         let icloud = Shared(Arc::new(Mutex::new(std::mem::take(&mut fixture.icloud))));
         if offline {
             icloud.with(|i| i.offline_after = Some(0));
@@ -112,7 +119,8 @@ impl Running {
                 retry: Duration::from_millis(100),
                 retry_max: Duration::from_millis(400),
                 follow_ups: 3,
-                rehash: Duration::from_secs(3600),
+                upkeep: Duration::from_secs(3600),
+                keep_history: Duration::from_secs(30 * 24 * 3600),
             };
             let mut daemon = Daemon::new(setup, db, watches, timing);
             daemon.run(&mut remote, &receiver, &mut |s| {
@@ -162,6 +170,11 @@ fn a_local_change_is_synced_without_waiting_for_the_poll() {
     d.icloud.with(|i| i.put("from-iphone.txt", b"i"));
     let first = d.until_idle();
     assert_eq!(first[0].done, 1, "the first run starts at once: {first:?}");
+    assert_eq!(first[0].purged, Some(1), "upkeep at the first run");
+    assert!(
+        first[1..].iter().all(|s| s.purged.is_none()),
+        "then once a day: {first:?}"
+    );
 
     d.write("from-linux.txt", b"l");
     let runs = d.until_idle();

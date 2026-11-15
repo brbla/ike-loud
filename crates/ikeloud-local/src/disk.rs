@@ -16,7 +16,7 @@ use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ikeloud_safety::{ContentHash, LocalId, LocalVersion, RelPath};
 
@@ -45,6 +45,19 @@ pub struct LocalDisk {
     trash: PathBuf,
     history: PathBuf,
 }
+
+/// What [`LocalDisk::purge_history`] did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Purged {
+    /// Saved versions removed.
+    pub removed: usize,
+    /// Saved versions that are due but could not be removed (tried again
+    /// next time).
+    pub failed: usize,
+}
+
+/// How long replaced versions are kept (spec: 30 days).
+pub const HISTORY_KEPT: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// Unique part of temporary and history names within this process.
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -223,6 +236,49 @@ impl LocalDisk {
         Ok((id, ContentHash::new(ikeloud_hash::hex(&hash))))
     }
 
+    /// Removes versions from the local history that were saved more than
+    /// `kept` before `now`.
+    ///
+    /// Each saved version is a folder `<seconds>-<unique>` named after the
+    /// time it was saved (not the file's own times: a hard link keeps the
+    /// modification time of the file it was saved from). Anything else in
+    /// the history folder was not put there by ike loud and is left alone,
+    /// as is a version saved "in the future" (a clock set back since). A
+    /// history folder that does not exist yet has nothing to remove.
+    ///
+    /// # Errors
+    /// The history folder exists but cannot be read.
+    pub fn purge_history(&self, now: SystemTime, kept: Duration) -> io::Result<Purged> {
+        let mut purged = Purged::default();
+        let Some(cutoff) = now
+            .checked_sub(kept)
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        else {
+            return Ok(purged);
+        };
+        let entries = match fs::read_dir(&self.history) {
+            Ok(e) => e,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(purged),
+            Err(e) => return Err(e),
+        };
+        for entry in entries {
+            let entry = entry?;
+            let Some(saved) = entry.file_name().to_str().and_then(saved_at) else {
+                continue;
+            };
+            // Only our own folders, never through a symbolic link.
+            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+            if !is_dir || saved >= cutoff.as_secs() {
+                continue;
+            }
+            match fs::remove_dir_all(entry.path()) {
+                Ok(()) => purged.removed += 1,
+                Err(_) => purged.failed += 1,
+            }
+        }
+        Ok(purged)
+    }
+
     /// Keeps the current version of `path` in the local history (a hard
     /// link, or a copy across filesystems).
     fn keep_in_history(&self, path: &RelPath, now: SystemTime) -> Result<(), DiskError> {
@@ -243,6 +299,19 @@ impl LocalDisk {
         }
         Ok(())
     }
+}
+
+/// The time a history folder `<seconds>-<pid>-<n>` was saved, in seconds
+/// since the Unix epoch; `None` for any other name.
+fn saved_at(name: &str) -> Option<u64> {
+    let mut parts = name.split('-');
+    let secs = parts.next()?;
+    let rest: Vec<&str> = parts.collect();
+    let digits = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+    if !digits(secs) || rest.len() != 2 || !rest.iter().all(|p| digits(p)) {
+        return None;
+    }
+    secs.parse().ok()
 }
 
 /// Moves `from` to `to` unless `to` exists. A hard link is created first
@@ -312,7 +381,24 @@ fn trash_date(now: SystemTime) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{percent_encode, trash_date};
+    use super::{percent_encode, saved_at, trash_date};
+
+    #[test]
+    fn history_folder_names() {
+        assert_eq!(saved_at("1700000000-42-7"), Some(1_700_000_000));
+        for other in [
+            "",
+            "1700000000",
+            "1700000000-42",
+            "x-42-7",
+            "17-42-7-1",
+            "17--7",
+            "+17-1-2",
+            "notes.txt",
+        ] {
+            assert_eq!(saved_at(other), None, "{other}");
+        }
+    }
     use std::path::Path;
     use std::time::{Duration, UNIX_EPOCH};
 
