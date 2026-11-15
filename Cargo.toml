@@ -22,6 +22,8 @@ publish = false
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
+# Kani proofs live under cfg(kani) (docs/rozhodnuti/0013).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
 
 [workspace.lints.clippy]
 # Spec: no unwrap(), expect() or panic! in production code.

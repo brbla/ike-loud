@@ -62,11 +62,20 @@ patří do démona: proces bez core dumpů (`PR_SET_DUMPABLE`), milník 1.
 
 ## Zbývá
 
-- **Kani.** Kandidát na důkaz je `Threshold::exceeded_by`: brzda pro všechny
-  hodnoty `u64` přesně odpovídá vzorci ze zadání a nepřeteče. Kani se ale
-  instaluje jako předpřipravený balík z GitHubu (CBMC a vlastní nightly
-  toolchain). Podle zásady 0007 ho musíme připnout kontrolním součtem
-  stejně jako `tla2tools.jar`. Až do té doby ho README nezmiňuje.
+- **Kani v CI.** Důkazy jsou napsané a lokálně projdou
+  (`scripts/kani.sh`, modul `proofs` v `crates/ikeloud-safety/src/context.rs`):
+  - výchozí limity brzdy: do 10 smazaných souborů nikdy nebrzdí, nad 50 vždy,
+    pro jakýkoli počet synchronizovaných souborů (0,1 s);
+  - víc změn brzdu nikdy nevypne, pro všechny hodnoty `u64` a podíl do 100 %
+    (108 s).
+
+  Třetí vlastnost („víc synchronizovaných souborů brzdu nezapne“) solver
+  nedokázal ani za 15 minut, ani s mezí 4 miliardy souborů, a proto byla
+  vyřazena. Do CI Kani zatím nejde: instaluje se jako předpřipravený balík
+  z GitHubu (asi 500 MB, CBMC a vlastní nightly toolchain). Podle zásady 0007
+  ho nejdřív připneme kontrolním součtem stejně jako `tla2tools.jar`. Pak
+  poběží jen při změně bezpečnostní vrstvy, se stejným otiskem vstupů jako
+  mutace.
 - **`cargo vet` má 60 výjimek a žádný audit.** Projde, ale nic tím
   neověřuje. Audity musí udělat člověk; seznam výjimek je dluh, který se
   bude splácet od nejmenších crate.
