@@ -4,12 +4,20 @@
 //! `tla/SyncMoves.tla` (moves and path collisions).
 //!
 //! **Pairing.** A local file and a server document are the same file when
-//! the last common state says so: by inode locally and by document ID on the
-//! server. Editors that save by writing a new file and renaming it over the
-//! old one give the file a new inode; so when the inode of a common-state
-//! entry is gone, an unpaired local file standing on the entry's path is
-//! taken as the same file. Files not in the common state are paired by name
-//! (key from [`crate::names::key`]).
+//! the last common state says so: by identity locally (device, inode and
+//! birth time, see `pairing.rs`) and by document ID on the server. Editors
+//! that save by writing a new file and renaming it over the old one give the
+//! file a new inode; so when the identity of a common-state entry is gone,
+//! an unpaired local file standing on the entry's path is taken as the same
+//! file. Files not in the common state are paired by name (key from
+//! [`crate::names::key`]).
+//!
+//! **Files left alone** this run, on both sides: names in a collision,
+//! files still being written (unchanged for less than the settle time: an
+//! editor may still rename or replace them) and known files renamed to a
+//! name that is never synced (`report.odt` → `report.odt.part`). Their
+//! server counterparts stay as they are; nothing is uploaded, downloaded or
+//! deleted for them.
 //!
 //! **Decision per file** (spec, chapter Basic principles), content first:
 //!
@@ -32,11 +40,16 @@
 //! time.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
-use ikeloud_safety::{Action, RelPath, names as safety_names};
+use ikeloud_safety::{Action, LocalId, LocalVersion, RelPath, names as safety_names};
 
 use crate::names::{key, nfc, same_place};
+use crate::pairing::LocalIndex;
 use crate::state::{BaseEntry, DocId, LocalFile, RemoteFile, States};
+
+/// How many conflict copy names are tried before giving up on a file.
+pub const MAX_COPY_NAME_ATTEMPTS: u32 = 1000;
 
 /// The side a collision is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,21 +79,31 @@ pub struct Plan {
     pub actions: Vec<Action>,
     /// Name collisions the sync skipped.
     pub collisions: Vec<Collision>,
+    /// Local files still being written; synced once they settle.
+    pub busy: Vec<RelPath>,
+    /// Files left alone because no free conflict copy name was found (the
+    /// translation of the name does not use the number).
+    pub no_copy_name: Vec<RelPath>,
 }
 
 /// Builds a plan from the three states.
 ///
-/// `conflict_name(path, n)` returns the name of a conflict copy of `path`;
-/// `n` is the attempt number from 1 and increases until the name is free.
-/// The caller supplies the name because the user sees it and it is
-/// translated.
+/// Local files unchanged for less than `settle_time` are left alone (see
+/// the module documentation). `conflict_name(path, n)` returns the name of a
+/// conflict copy of `path`; `n` is the attempt number from 1 and increases
+/// until the name is free (at most [`MAX_COPY_NAME_ATTEMPTS`]). The caller
+/// supplies the name because the user sees it and it is translated.
 ///
 /// The plan may leave work for the next run (e.g. a file that was renamed to
 /// make room is moved to its final place later); the executor checks every
 /// action's preconditions and the next scan picks up the rest.
-pub fn build_plan(states: &States, conflict_name: &dyn Fn(&RelPath, u32) -> RelPath) -> Plan {
+pub fn build_plan(
+    states: &States,
+    settle_time: Duration,
+    conflict_name: &dyn Fn(&RelPath, u32) -> RelPath,
+) -> Plan {
     let mut planner = Planner::new(states, conflict_name);
-    planner.run(states);
+    planner.run(states, settle_time);
     let mut plan = planner.plan;
     let folders = missing_folders(&plan.actions, states);
     plan.actions.splice(0..0, folders);
@@ -91,14 +114,14 @@ struct Planner<'a> {
     conflict_name: &'a dyn Fn(&RelPath, u32) -> RelPath,
     plan: Plan,
     /// Normalized names taken on each side, with who holds them.
-    local_taken: BTreeMap<String, u64>,
+    local_taken: BTreeMap<String, LocalId>,
     remote_taken: BTreeMap<String, DocId>,
     /// Every name in use anywhere (for picking free conflict copy names).
     names_in_use: BTreeSet<String>,
-    /// Where a local file is after the moves planned so far (by inode). Every
-    /// later decision must use this path, never the scanned one: the scanned
-    /// path may by then hold a different file.
-    current: BTreeMap<u64, RelPath>,
+    /// Where a local file is after the moves planned so far. Every later
+    /// decision must use this path, never the scanned one: the scanned path
+    /// may by then hold a different file.
+    current: BTreeMap<LocalId, RelPath>,
 }
 
 impl<'a> Planner<'a> {
@@ -118,7 +141,7 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn run(&mut self, states: &States) {
+    fn run(&mut self, states: &States, settle_time: Duration) {
         let local = usable(
             &states.local,
             |f| &f.path,
@@ -131,93 +154,79 @@ impl<'a> Planner<'a> {
             Side::Remote,
             &mut self.plan.collisions,
         );
-        self.local_taken = local
-            .iter()
-            .map(|f| (key(f.path.as_str()), f.inode))
-            .collect();
-        self.current = local.iter().map(|f| (f.inode, f.path.clone())).collect();
+        self.local_taken = local.iter().map(|f| (key(f.path.as_str()), f.id)).collect();
+        self.current = local.iter().map(|f| (f.id, f.path.clone())).collect();
         self.remote_taken = remote
             .iter()
             .map(|f| (key(f.path.as_str()), f.doc_id.clone()))
             .collect();
 
-        let mut local_by_inode: BTreeMap<u64, &LocalFile> =
-            local.iter().map(|f| (f.inode, *f)).collect();
-        let mut local_by_key: BTreeMap<String, &LocalFile> =
-            local.iter().map(|f| (key(f.path.as_str()), *f)).collect();
-        let mut remote_by_doc: BTreeMap<&DocId, &RemoteFile> =
+        let held = self.held_names(states, settle_time);
+        let is_held = |path: &RelPath| {
+            held.contains(&key(path.as_str())) || safety_names::is_ignored(path.name())
+        };
+        let index = LocalIndex::new(&states.local, &states.base);
+        let remote_by_doc: BTreeMap<&DocId, &RemoteFile> =
             remote.iter().map(|f| (&f.doc_id, *f)).collect();
-
-        let base_inodes: BTreeSet<u64> = states.base.iter().filter_map(|b| b.inode).collect();
-        let blocked: BTreeSet<String> = self
-            .plan
-            .collisions
-            .iter()
-            .flat_map(|c| c.paths.iter().map(|p| key(p.as_str())))
-            .collect();
-        // Files in a name collision still exist: a known file renamed into a
-        // collision must not look deleted.
-        let blocked_inodes: BTreeSet<u64> = states
-            .local
-            .iter()
-            .filter(|f| blocked.contains(&key(f.path.as_str())))
-            .map(|f| f.inode)
-            .collect();
-        let blocked_docs: BTreeSet<&DocId> = states
-            .remote
-            .iter()
-            .filter(|f| blocked.contains(&key(f.path.as_str())))
-            .map(|f| &f.doc_id)
-            .collect();
+        let mut paired_local: BTreeSet<LocalId> = BTreeSet::new();
+        let mut paired_docs: BTreeSet<&DocId> = BTreeSet::new();
 
         // Files known to the common state, paired by identity.
         let mut base: Vec<&BaseEntry> = states.base.iter().collect();
         base.sort_by_key(|b| key(b.path.as_str()));
         for b in base {
-            if blocked.contains(&key(b.path.as_str()))
-                || b.inode.is_some_and(|i| blocked_inodes.contains(&i))
-                || blocked_docs.contains(&b.doc_id)
-            {
-                // A name collision: leave both sides of this file alone.
-                remote_by_doc.remove(&b.doc_id);
-                if let Some(l) = b.inode.and_then(|i| local_by_inode.remove(&i)) {
-                    local_by_key.remove(&key(l.path.as_str()));
-                }
-                continue;
+            let l = index.find(b, |l| !paired_local.contains(&l.id));
+            let r = remote_by_doc.get(&b.doc_id).copied();
+            paired_local.extend(l.map(|l| l.id));
+            paired_docs.insert(&b.doc_id);
+            let left_alone = is_held(&b.path)
+                || l.is_some_and(|l| is_held(&l.path))
+                || states
+                    .remote
+                    .iter()
+                    .any(|f| f.doc_id == b.doc_id && is_held(&f.path));
+            if !left_alone {
+                self.decide_known(l, r, b);
             }
-            let l = b
-                .inode
-                .and_then(|i| local_by_inode.get(&i).copied())
-                .or_else(|| {
-                    // Saved by "write a new file and rename it over": new inode, same path.
-                    let candidate = local_by_key.get(&key(b.path.as_str())).copied()?;
-                    (!base_inodes.contains(&candidate.inode)).then_some(candidate)
-                });
-            if let Some(l) = l {
-                local_by_inode.remove(&l.inode);
-                local_by_key.remove(&key(l.path.as_str()));
-            }
-            let r = remote_by_doc.remove(&b.doc_id);
-            self.decide_known(l, r, b);
         }
 
         // New files, paired by name.
-        let new_local: BTreeMap<String, &LocalFile> = local_by_inode
-            .values()
+        let new_local: BTreeMap<String, &LocalFile> = local
+            .iter()
+            .filter(|f| !paired_local.contains(&f.id) && !is_held(&f.path))
             .map(|f| (key(f.path.as_str()), *f))
             .collect();
-        let new_remote: BTreeMap<String, &RemoteFile> = remote_by_doc
-            .values()
+        let new_remote: BTreeMap<String, &RemoteFile> = remote
+            .iter()
+            .filter(|f| !paired_docs.contains(&f.doc_id) && !is_held(&f.path))
             .map(|f| (key(f.path.as_str()), *f))
             .collect();
-        let names: BTreeSet<&String> = new_local
-            .keys()
-            .chain(new_remote.keys())
-            .filter(|k| !blocked.contains(*k))
-            .collect();
+        let names: BTreeSet<&String> = new_local.keys().chain(new_remote.keys()).collect();
         for k in names {
             self.decide_new(new_local.get(k).copied(), new_remote.get(k).copied());
         }
+    }
+
+    /// Names sync leaves alone this run, on both sides: names in a
+    /// collision and names of local files still being written.
+    fn held_names(&mut self, states: &States, settle_time: Duration) -> BTreeSet<String> {
+        let mut busy: Vec<RelPath> = states
+            .local
+            .iter()
+            .filter(|f| f.stable_for < settle_time && !safety_names::is_ignored(f.path.name()))
+            .map(|f| f.path.clone())
+            .collect();
+        busy.sort();
+        let held = self
+            .plan
+            .collisions
+            .iter()
+            .flat_map(|c| c.paths.iter())
+            .chain(&busy)
+            .map(|p| key(p.as_str()))
+            .collect();
+        self.plan.busy = busy;
+        held
     }
 
     /// A file the common state knows (`b`), with what is left of it on each side.
@@ -230,10 +239,16 @@ impl<'a> Planner<'a> {
             (None, None) => {}
             (Some(l), None) if !local_changed => {
                 let path = self.path_of(l);
-                self.push(Action::TrashLocal { path });
+                self.push(Action::TrashLocal {
+                    path,
+                    expected: version(l),
+                });
             }
             // Deleted on iCloud, changed on Linux: iCloud wins, keep the local version.
-            (Some(l), None) => self.keep_as_conflict_copy(l),
+            (Some(l), None) => {
+                // No free name: reported in `no_copy_name`, left alone.
+                let _ = self.keep_as_conflict_copy(l);
+            }
             (None, Some(r)) if !remote_changed => self.push(Action::TrashRemote {
                 path: r.path.clone(),
                 expected_etag: r.etag.clone(),
@@ -246,6 +261,7 @@ impl<'a> Planner<'a> {
                     self.push(Action::Upload {
                         local,
                         remote: r.path.clone(),
+                        local_id: l.id,
                         expected_etag: Some(r.etag.clone()),
                         size: l.size,
                         stable_for: l.stable_for,
@@ -257,19 +273,15 @@ impl<'a> Planner<'a> {
                         remote: r.path.clone(),
                         local,
                         size: r.size,
-                        overwrites_local: true,
+                        replaces: Some(version(l)),
                     });
                 }
                 (true, true) => {
                     // Download to where the local file was before it became a copy.
                     let original = self.path_of(l);
-                    self.keep_as_conflict_copy(l);
-                    self.push(Action::Download {
-                        remote: r.path.clone(),
-                        local: original,
-                        size: r.size,
-                        overwrites_local: false,
-                    });
+                    if self.keep_as_conflict_copy(l).is_some() {
+                        self.push(download_new(r, original));
+                    }
                 }
                 (false, false) => self.decide_path(l, r, b),
             },
@@ -300,9 +312,10 @@ impl<'a> Planner<'a> {
                 let target = RelPath::new(nfc(from.as_str()));
                 if self.remote_taken_by_other(&target, None) {
                     // A different file already has this name on iCloud: yield.
-                    let copy = self.free_copy_name(&from);
-                    self.local_move(l.inode, from, copy.clone());
-                    self.push(upload_new(l, copy.clone(), copy));
+                    if let Some(copy) = self.free_copy_name(&from) {
+                        self.local_move(l.id, from, copy.clone());
+                        self.push(upload_new(l, copy.clone(), copy));
+                    }
                 } else {
                     self.push(upload_new(l, from, target));
                 }
@@ -312,99 +325,101 @@ impl<'a> Planner<'a> {
             // the contents cannot be compared, so iCloud wins and the local
             // file becomes a conflict copy.
             (Some(l), Some(r)) => {
-                self.keep_as_conflict_copy(l);
-                self.push(Action::Download {
-                    remote: r.path.clone(),
-                    local: r.path.clone(),
-                    size: r.size,
-                    overwrites_local: false,
-                });
+                if self.keep_as_conflict_copy(l).is_some() {
+                    self.push(download_new(r, r.path.clone()));
+                }
             }
         }
     }
 
-    /// Rename the local file to a conflict copy name and upload it as a new file.
-    fn keep_as_conflict_copy(&mut self, l: &LocalFile) {
+    /// Rename the local file to a conflict copy name and upload it as a new
+    /// file. `None` (nothing planned) if no free name was found.
+    fn keep_as_conflict_copy(&mut self, l: &LocalFile) -> Option<()> {
         let from = self.path_of(l);
-        let copy = self.free_copy_name(&from);
-        self.local_move(l.inode, from, copy.clone());
+        let copy = self.free_copy_name(&from)?;
+        self.local_move(l.id, from, copy.clone());
         self.push(Action::UploadConflictCopy {
             path: copy,
+            local_id: l.id,
             size: l.size,
+            stable_for: l.stable_for,
         });
+        Some(())
     }
 
     /// Download a server file to its server path, making room locally if needed.
     fn place_locally(&mut self, r: &RemoteFile) {
-        self.evict_local(&r.path, None);
-        self.push(Action::Download {
-            remote: r.path.clone(),
-            local: r.path.clone(),
-            size: r.size,
-            overwrites_local: false,
-        });
+        if self.evict_local(&r.path, None).is_some() {
+            self.push(download_new(r, r.path.clone()));
+        }
     }
 
     /// Move a local file to `target`, making room locally if needed.
     fn move_locally(&mut self, l: &LocalFile, target: RelPath) {
-        self.evict_local(&target, Some(l.inode));
-        let from = self.path_of(l);
-        self.local_move(l.inode, from, target);
+        if self.evict_local(&target, Some(l.id)).is_some() {
+            let from = self.path_of(l);
+            self.local_move(l.id, from, target);
+        }
     }
 
     /// Repeat a local move on the server, or yield if the name is taken there.
     fn move_remotely(&mut self, l: &LocalFile, r: &RemoteFile) {
         let from = self.path_of(l);
         let target = RelPath::new(nfc(from.as_str()));
-        if self.remote_taken_by_other(&target, Some(&r.doc_id)) {
-            let copy = self.free_copy_name(&from);
-            self.local_move(l.inode, from, copy.clone());
-            self.push(Action::MoveRemote {
-                from: r.path.clone(),
-                to: copy,
-                expected_etag: r.etag.clone(),
-            });
+        let to = if self.remote_taken_by_other(&target, Some(&r.doc_id)) {
+            let Some(copy) = self.free_copy_name(&from) else {
+                return;
+            };
+            self.local_move(l.id, from, copy.clone());
+            copy
         } else {
-            self.push(Action::MoveRemote {
-                from: r.path.clone(),
-                to: target,
-                expected_etag: r.etag.clone(),
-            });
-        }
+            target
+        };
+        self.push(Action::MoveRemote {
+            from: r.path.clone(),
+            to,
+            expected_etag: r.etag.clone(),
+        });
     }
 
-    /// If another local file stands on `target`, rename it to a conflict copy name.
-    fn evict_local(&mut self, target: &RelPath, owner: Option<u64>) {
+    /// If another local file stands on `target`, rename it to a conflict
+    /// copy name. `None` if it is in the way and no free name was found.
+    fn evict_local(&mut self, target: &RelPath, owner: Option<LocalId>) -> Option<()> {
         let k = key(target.as_str());
         let Some(&occupant) = self.local_taken.get(&k) else {
-            return;
+            return Some(());
         };
         if Some(occupant) == owner {
-            return;
+            return Some(());
         }
         let from = self
             .current
             .get(&occupant)
             .cloned()
             .unwrap_or_else(|| target.clone());
-        let copy = self.free_copy_name(&from);
+        let copy = self.free_copy_name(&from)?;
         self.local_move(occupant, from, copy);
+        Some(())
     }
 
     /// Current local path of a file (after the moves planned so far).
     fn path_of(&self, l: &LocalFile) -> RelPath {
         self.current
-            .get(&l.inode)
+            .get(&l.id)
             .cloned()
             .unwrap_or_else(|| l.path.clone())
     }
 
     /// The only way the planner moves a local file: records the new path.
-    fn local_move(&mut self, inode: u64, from: RelPath, to: RelPath) {
+    fn local_move(&mut self, id: LocalId, from: RelPath, to: RelPath) {
         self.local_taken.remove(&key(from.as_str()));
-        self.local_taken.insert(key(to.as_str()), inode);
-        self.current.insert(inode, to.clone());
-        self.push(Action::MoveLocal { from, to });
+        self.local_taken.insert(key(to.as_str()), id);
+        self.current.insert(id, to.clone());
+        self.push(Action::MoveLocal {
+            from,
+            to,
+            local_id: id,
+        });
     }
 
     fn remote_taken_by_other(&self, target: &RelPath, owner: Option<&DocId>) -> bool {
@@ -413,15 +428,20 @@ impl<'a> Planner<'a> {
             .is_some_and(|holder| Some(holder) != owner)
     }
 
-    fn free_copy_name(&mut self, path: &RelPath) -> RelPath {
-        let mut n = 1;
-        loop {
+    /// A conflict copy name no file uses, in the same folder, that is synced
+    /// (not an ignored name). `None` after [`MAX_COPY_NAME_ATTEMPTS`]; the
+    /// file is then reported and left alone.
+    fn free_copy_name(&mut self, path: &RelPath) -> Option<RelPath> {
+        for n in 1..=MAX_COPY_NAME_ATTEMPTS {
             let candidate = (self.conflict_name)(path, n);
-            if self.names_in_use.insert(key(candidate.as_str())) || n == u32::MAX {
-                return candidate;
+            let usable =
+                candidate.parent() == path.parent() && !safety_names::is_ignored(candidate.name());
+            if usable && self.names_in_use.insert(key(candidate.as_str())) {
+                return Some(candidate);
             }
-            n += 1;
         }
+        self.plan.no_copy_name.push(path.clone());
+        None
     }
 
     fn push(&mut self, action: Action) {
@@ -433,9 +453,28 @@ fn upload_new(l: &LocalFile, local: RelPath, remote: RelPath) -> Action {
     Action::Upload {
         local,
         remote,
+        local_id: l.id,
         expected_etag: None,
         size: l.size,
         stable_for: l.stable_for,
+    }
+}
+
+/// Download to a local path that must be free.
+fn download_new(r: &RemoteFile, local: RelPath) -> Action {
+    Action::Download {
+        remote: r.path.clone(),
+        local,
+        size: r.size,
+        replaces: None,
+    }
+}
+
+/// The local file as the planner saw it (a precondition of local actions).
+fn version(l: &LocalFile) -> LocalVersion {
+    LocalVersion {
+        id: l.id,
+        hash: l.hash.clone(),
     }
 }
 

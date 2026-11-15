@@ -15,3 +15,6 @@ ikeloud-safety = { path = "../ikeloud-safety" }
 ikeloud-sync = { path = "../ikeloud-sync" }
 # SQLite bundled in a fixed version (spec). Single wrapper: src/db.rs.
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled"] }
+
+[dev-dependencies]
+ikeloud-testkit = { path = "../ikeloud-testkit" }

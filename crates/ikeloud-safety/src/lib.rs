@@ -15,7 +15,9 @@ pub mod assessment;
 pub mod context;
 pub mod names;
 
-pub use action::{Action, Etag, RelPath};
+pub use action::{
+    Action, ContentHash, Destruction, DestructionKind, Etag, LocalId, LocalVersion, RelPath,
+};
 pub use assessment::{
     ApprovedAction, ApprovedPlan, Decision, DeferReason, DeferredAction, MassChangeConfirmation,
     MassChangeSummary, Rejection, assess,

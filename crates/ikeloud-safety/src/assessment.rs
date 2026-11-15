@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::action::{Action, Etag, RelPath};
+use crate::action::{Action, Destruction, Etag, RelPath};
 use crate::context::{Context, LocalFolderState, Mode, ReadOnlyReason};
 use crate::names::{self, NameError};
 
@@ -70,27 +70,33 @@ pub enum Decision {
 /// Overview of a mass change for asking the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MassChangeSummary {
-    /// How many files would be deleted or overwritten.
-    pub count: u64,
+    /// The files that would be deleted or overwritten, sorted; shown to the
+    /// user (spec: the question lists the affected files).
+    pub files: Vec<Destruction>,
     /// How many files are synced.
     pub total: u64,
-    fingerprint: u64,
 }
 
 impl MassChangeSummary {
-    /// The user confirmed the change. The confirmation is valid only for
-    /// exactly the same plan.
+    /// How many files would be deleted or overwritten.
+    pub fn count(&self) -> u64 {
+        u64::try_from(self.files.len()).unwrap_or(u64::MAX)
+    }
+
+    /// The user confirmed the change. The confirmation covers exactly the
+    /// listed files in the listed versions: a later plan that destroys only
+    /// some of them passes, one that destroys anything else asks again.
     pub fn confirm(&self) -> MassChangeConfirmation {
         MassChangeConfirmation {
-            fingerprint: self.fingerprint,
+            files: self.files.iter().cloned().collect(),
         }
     }
 }
 
-/// Confirmation of a mass change, bound to one specific plan.
+/// Confirmation of a mass change, bound to the files the user saw.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MassChangeConfirmation {
-    fingerprint: u64,
+    files: BTreeSet<Destruction>,
 }
 
 /// Why the plan is not carried out at all. Sync stops.
@@ -190,7 +196,8 @@ fn defer_reason(
     if let Some(with) = collisions.get(action.path()) {
         return Some(DeferReason::CaseCollision { with: with.clone() });
     }
-    if let Action::Upload { stable_for, .. } = action
+    if let Action::Upload { stable_for, .. } | Action::UploadConflictCopy { stable_for, .. } =
+        action
         && *stable_for < context.settle_time
     {
         return Some(DeferReason::StillBeingWritten);
@@ -283,7 +290,10 @@ fn check_conflicts(actions: &[Action], remote: &BTreeMap<RelPath, Etag>) -> Resu
 }
 
 fn check_mass_change(actions: &[Action], context: &Context) -> Result<(), Rejection> {
-    let count = actions.iter().filter(|a| a.deletes_or_overwrites()).count() as u64;
+    let mut files: Vec<Destruction> = actions.iter().filter_map(Action::destruction).collect();
+    files.sort();
+    files.dedup();
+    let count = u64::try_from(files.len()).unwrap_or(u64::MAX);
     let limits = context.limits;
     let total = context.synced_count;
     let above_absolute = count > limits.absolute;
@@ -292,18 +302,16 @@ fn check_mass_change(actions: &[Action], context: &Context) -> Result<(), Reject
     if !(above_absolute || above_share) {
         return Ok(());
     }
-    let fingerprint = plan_fingerprint(actions);
     if context
         .confirmation
         .as_ref()
-        .is_some_and(|c| c.fingerprint == fingerprint)
+        .is_some_and(|c| files.iter().all(|f| c.files.contains(f)))
     {
         return Ok(());
     }
     Err(Rejection::MassChangeNeedsConfirmation(MassChangeSummary {
-        count,
+        files,
         total,
-        fingerprint,
     }))
 }
 
@@ -333,14 +341,4 @@ fn check_space(actions: &[Action], context: &Context) -> Result<(), Rejection> {
         });
     }
     Ok(())
-}
-
-/// Plan fingerprint (FNV-1a 64 over the debug form of the actions). It only
-/// makes a confirmation valid for exactly the plan the user saw.
-fn plan_fingerprint(actions: &[Action]) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let text = format!("{actions:?}");
-    text.bytes()
-        .fold(OFFSET, |h, b| (h ^ u64::from(b)).wrapping_mul(PRIME))
 }

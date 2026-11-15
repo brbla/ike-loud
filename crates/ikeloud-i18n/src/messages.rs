@@ -23,7 +23,7 @@ impl ToMessage for Rejection {
                 Message::new("rejected-conflict").arg("count", Value::Number(paths.len() as u64))
             }
             Self::MassChangeNeedsConfirmation(summary) => Message::new("rejected-mass-change")
-                .arg("count", Value::Number(summary.count))
+                .arg("count", Value::Number(summary.count()))
                 .arg("total", Value::Number(summary.total)),
             Self::NotEnoughICloudSpace { needed, free } => Message::new("rejected-icloud-space")
                 .arg("needed", Value::Size(*needed))

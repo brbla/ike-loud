@@ -15,13 +15,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ikeloud_safety::Etag;
+use ikeloud_safety::{ContentHash, Etag, LocalId, RelPath};
 
 use crate::names::{key, same_place};
-use crate::state::{BaseEntry, ContentHash, DocId, LocalFile, RemoteFile, States};
+use crate::pairing::LocalIndex;
+use crate::state::{BaseEntry, DocId, LocalFile, RemoteFile, States};
 
 /// What the executor learned from one transfer (upload or download): the
-/// local file `inode` with content `hash` and the server document `doc_id`
+/// local file `local` with content `hash` and the server document `doc_id`
 /// at version `etag` now hold the same content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transfer {
@@ -30,7 +31,7 @@ pub struct Transfer {
     /// Its version after the transfer.
     pub etag: Etag,
     /// Local file.
-    pub inode: u64,
+    pub local: LocalId,
     /// Its content hash after the transfer.
     pub hash: ContentHash,
 }
@@ -42,16 +43,16 @@ pub struct Transfer {
 /// file is gone on both sides are dropped; everything else is kept, updated
 /// only where both sides demonstrably agree.
 pub fn next_base(old: &[BaseEntry], after: &States, transfers: &[Transfer]) -> Vec<BaseEntry> {
-    let local_by_inode: BTreeMap<u64, &LocalFile> =
-        after.local.iter().map(|f| (f.inode, f)).collect();
+    let local_by_id: BTreeMap<LocalId, &LocalFile> =
+        after.local.iter().map(|f| (f.id, f)).collect();
     let remote_by_doc: BTreeMap<&DocId, &RemoteFile> =
         after.remote.iter().map(|f| (&f.doc_id, f)).collect();
     let old_by_doc: BTreeMap<&DocId, &BaseEntry> = old.iter().map(|b| (&b.doc_id, b)).collect();
-    let known_inodes: BTreeSet<u64> = old.iter().filter_map(|b| b.inode).collect();
+    let index = LocalIndex::new(&after.local, old);
 
     let mut next: Vec<BaseEntry> = Vec::new();
     let mut used_docs: BTreeSet<DocId> = BTreeSet::new();
-    let mut used_inodes: BTreeSet<u64> = BTreeSet::new();
+    let mut used_local: BTreeSet<LocalId> = BTreeSet::new();
 
     // 1. Transfers: proof that both sides hold the same content (the last
     //    transfer of a document wins). Only if neither side changed since.
@@ -60,30 +61,22 @@ pub fn next_base(old: &[BaseEntry], after: &States, transfers: &[Transfer]) -> V
         last.insert(&t.doc_id, t);
     }
     for (doc, t) in last {
-        let (Some(r), Some(l)) = (remote_by_doc.get(doc), local_by_inode.get(&t.inode)) else {
+        let (Some(r), Some(l)) = (remote_by_doc.get(doc), local_by_id.get(&t.local)) else {
             continue;
         };
-        if r.etag != t.etag || l.hash != t.hash || used_inodes.contains(&l.inode) {
+        if r.etag != t.etag || l.hash != t.hash || used_local.contains(&l.id) {
             continue;
         }
-        let path = if same_place(l.path.as_str(), r.path.as_str()) {
-            r.path.clone()
-        } else {
-            // Still in different places (e.g. moved on one side): the path
-            // stays what both sides last agreed on.
-            old_by_doc
-                .get(doc)
-                .map_or_else(|| r.path.clone(), |b| b.path.clone())
-        };
         next.push(BaseEntry {
-            path,
-            inode: Some(l.inode),
+            path: common_path(old_by_doc.get(doc).map(|b| &b.path), l, r),
+            local_path: l.path.clone(),
+            local: Some(l.id),
             doc_id: doc.clone(),
             hash: t.hash.clone(),
             etag: t.etag.clone(),
         });
         used_docs.insert(doc.clone());
-        used_inodes.insert(l.inode);
+        used_local.insert(l.id);
     }
 
     // 2. Every other known file, paired like the planner pairs it.
@@ -92,56 +85,58 @@ pub fn next_base(old: &[BaseEntry], after: &States, transfers: &[Transfer]) -> V
             continue;
         }
         let r = remote_by_doc.get(&b.doc_id).copied();
-        let l = b
-            .inode
-            .and_then(|i| local_by_inode.get(&i).copied())
-            .filter(|l| !used_inodes.contains(&l.inode))
-            .or_else(|| {
-                // Re-saved by "write a new file and rename it over".
-                after.local.iter().find(|l| {
-                    key(l.path.as_str()) == key(b.path.as_str())
-                        && !known_inodes.contains(&l.inode)
-                        && !used_inodes.contains(&l.inode)
-                })
-            });
-        let mut entry = b.clone();
-        match (l, r) {
-            (None, None) => continue,
-            (Some(l), Some(r)) => {
-                entry.inode = Some(l.inode);
-                let unchanged = l.hash == b.hash && r.etag == b.etag;
-                if unchanged && same_place(l.path.as_str(), r.path.as_str()) {
-                    entry.path = r.path.clone();
-                }
-                used_inodes.insert(l.inode);
-            }
-            (Some(l), None) => {
-                entry.inode = Some(l.inode);
-                used_inodes.insert(l.inode);
-            }
-            (None, Some(_)) => {
-                // The local file is gone (or its inode now belongs to another
-                // file): forget the local identity, keep the server one.
-                if entry.inode.is_some_and(|i| used_inodes.contains(&i)) {
-                    entry.inode = None;
-                }
-            }
+        let l = index.find(b, |l| !used_local.contains(&l.id));
+        if l.is_none() && r.is_none() {
+            continue;
         }
+        let mut entry = b.clone();
+        // A local file that is gone loses its identity: its inode may soon
+        // belong to another file.
+        entry.local = l.map(|l| l.id);
+        if let Some(l) = l {
+            entry.local_path = l.path.clone();
+        }
+        if let (Some(l), Some(r)) = (l, r)
+            && l.hash == b.hash
+            && r.etag == b.etag
+        {
+            entry.path = common_path(Some(&b.path), l, r);
+        }
+        used_local.extend(entry.local);
         used_docs.insert(b.doc_id.clone());
         next.push(entry);
     }
 
-    // 3. Names and inodes stay unique; entries from step 1 (proven) win.
+    // 3. Names and local files stay unique; entries from step 1 (proven) win.
     let mut names: BTreeSet<String> = BTreeSet::new();
-    let mut inodes: BTreeSet<u64> = BTreeSet::new();
+    let mut slots: BTreeSet<(u64, u64)> = BTreeSet::new();
     next.retain(|b| names.insert(key(b.path.as_str())));
     for b in &mut next {
-        if let Some(i) = b.inode
-            && !inodes.insert(i)
+        if let Some(id) = b.local
+            && !slots.insert((id.device, id.inode))
         {
-            b.inode = None;
+            b.local = None;
         }
     }
     next.sort_by_key(|b| key(b.path.as_str()));
     next
+}
+
+/// The path to store for a file whose local and server sides are `l` and
+/// `r`, given the path both last agreed on.
+///
+/// When the two are in different places (moved on one side, the move not
+/// carried over yet), the stored path must keep telling the planner which
+/// side moved, and it must be a place this file still holds: a path nobody
+/// holds any more may be taken by another file, which would then be taken
+/// for this one (found by the simulation). So: the old path while the server
+/// side is still there (the local side moved), otherwise the local path (the
+/// server side moved; the planner then follows it, iCloud wins).
+fn common_path(old: Option<&RelPath>, l: &LocalFile, r: &RemoteFile) -> RelPath {
+    match old {
+        _ if same_place(l.path.as_str(), r.path.as_str()) => r.path.clone(),
+        Some(old) if same_place(r.path.as_str(), old.as_str()) => old.clone(),
+        Some(_) => l.path.clone(),
+        None => r.path.clone(),
+    }
 }

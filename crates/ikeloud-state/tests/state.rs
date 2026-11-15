@@ -4,22 +4,13 @@
 
 use std::path::PathBuf;
 
-use ikeloud_safety::{Etag, RelPath};
+use ikeloud_safety::RelPath;
 use ikeloud_state::{BaseChange, JournalEntry, JournalKind, StateDb, StateError};
-use ikeloud_sync::{BaseEntry, ContentHash, DocId};
+use ikeloud_sync::{BaseEntry, DocId};
+use ikeloud_testkit::base as entry;
 
-fn entry(path: &str, inode: u64, doc: &str, hash: &str, etag: &str) -> BaseEntry {
-    BaseEntry {
-        path: RelPath::new(path),
-        inode: Some(inode),
-        doc_id: DocId::new(doc),
-        hash: ContentHash::new(hash),
-        etag: Etag::new(etag),
-    }
-}
-
-fn set(path: &str, inode: u64, doc: &str, hash: &str, etag: &str) -> BaseChange {
-    BaseChange::Set(entry(path, inode, doc, hash, etag))
+fn set(path: &str, n: u64, doc: &str, hash: &str, etag: &str) -> BaseChange {
+    BaseChange::Set(entry(path, n, doc, hash, etag))
 }
 
 fn forget(doc: &str) -> BaseChange {
@@ -126,6 +117,50 @@ fn common_state_changes() {
             vec![vec![set("a", u64::MAX, "d1", "h", "e")]],
             vec![entry("a", u64::MAX, "d1", "h", "e")],
         ),
+        (
+            "a local move pending: local path and identity round-trip",
+            vec![vec![BaseChange::Set(BaseEntry {
+                local_path: RelPath::new("moved"),
+                local: Some(ikeloud_safety::LocalId {
+                    device: u64::MAX,
+                    inode: 3,
+                    birth_ns: Some(-5),
+                }),
+                ..entry("a", 1, "d1", "h", "e")
+            })]],
+            vec![BaseEntry {
+                local_path: RelPath::new("moved"),
+                local: Some(ikeloud_safety::LocalId {
+                    device: u64::MAX,
+                    inode: 3,
+                    birth_ns: Some(-5),
+                }),
+                ..entry("a", 1, "d1", "h", "e")
+            }],
+        ),
+        (
+            "same inode on another device is another file",
+            vec![vec![
+                set("a", 1, "d1", "h", "e"),
+                BaseChange::Set(BaseEntry {
+                    local: Some(ikeloud_safety::LocalId {
+                        device: 2,
+                        ..ikeloud_testkit::id(1)
+                    }),
+                    ..entry("b", 1, "d2", "h", "e")
+                }),
+            ]],
+            vec![
+                entry("a", 1, "d1", "h", "e"),
+                BaseEntry {
+                    local: Some(ikeloud_safety::LocalId {
+                        device: 2,
+                        ..ikeloud_testkit::id(1)
+                    }),
+                    ..entry("b", 1, "d2", "h", "e")
+                },
+            ],
+        ),
     ];
     for (name, commits, expected) in cases {
         let mut db = StateDb::open_in_memory().expect("open");
@@ -138,28 +173,51 @@ fn common_state_changes() {
 
 #[test]
 fn inconsistent_commits_fail_whole() {
-    // (name, change that must fail on top of entries a/d1/1 and b/d2/2)
-    let cases: Vec<(&str, Vec<BaseChange>)> = vec![
+    // (name, change that must fail on top of entries a/d1/1 and b/d2/2, error)
+    let taken = |s: &str| StateError::NameTaken {
+        path: RelPath::new(s),
+    };
+    let invalid = |field| StateError::InvalidValue { field };
+    let cases: Vec<(&str, Vec<BaseChange>, StateError)> = vec![
         (
             "another document takes a taken name",
             vec![set("a", 3, "d3", "h", "e")],
+            taken("a"),
         ),
         (
             "same name in another letter case",
             vec![set("A", 3, "d3", "h", "e")],
+            taken("A"),
         ),
         (
             "NFD form of a taken NFC name",
             vec![set("Pr\u{30c}i\u{301}loha", 3, "d3", "h", "e")],
+            taken("Pr\u{30c}i\u{301}loha"),
         ),
         (
-            "another document takes a taken inode",
-            vec![set("c", 1, "d3", "h", "e")],
+            "two new documents with one name in one commit",
+            vec![set("n", 3, "d3", "h", "e"), set("N", 4, "d4", "h", "e")],
+            taken("N"),
         ),
-        ("empty hash", vec![set("c", 3, "d3", "", "e")]),
-        ("empty document ID", vec![set("c", 3, "", "h", "e")]),
+        (
+            "another document takes a taken local file",
+            vec![set("c", 1, "d3", "h", "e")],
+            StateError::LocalFileTaken {
+                path: RelPath::new("c"),
+            },
+        ),
+        (
+            "empty hash",
+            vec![set("c", 3, "d3", "", "e")],
+            invalid("hash"),
+        ),
+        (
+            "empty document ID",
+            vec![set("c", 3, "", "h", "e")],
+            invalid("doc_id"),
+        ),
     ];
-    for (name, changes) in cases {
+    for (name, changes, error) in cases {
         let mut db = StateDb::open_in_memory().expect("open");
         let start = vec![
             set("a", 1, "d1", "h", "e"),
@@ -171,10 +229,7 @@ fn inconsistent_commits_fail_whole() {
         let mut all = vec![forget("d2")];
         all.extend(changes);
         let result = db.commit(&all, &[log(1, JournalKind::Uploaded, "x", None)]);
-        assert!(
-            matches!(result, Err(StateError::Sql(_))),
-            "{name}: {result:?}"
-        );
+        assert_eq!(result, Err(error), "{name}");
         assert_eq!(
             db.base().expect("read"),
             before,
@@ -255,7 +310,7 @@ fn journal_kind_names_are_stable() {
 fn time_out_of_range_is_rejected() {
     let mut db = StateDb::open_in_memory().expect("open");
     let result = db.commit(&[], &[log(u64::MAX, JournalKind::Uploaded, "a", None)]);
-    assert!(matches!(result, Err(StateError::Sql(_))), "{result:?}");
+    assert_eq!(result, Err(StateError::InvalidValue { field: "time" }));
     assert_eq!(db.journal(10).expect("read"), vec![]);
 }
 
@@ -310,10 +365,8 @@ fn unopenable_path_is_an_open_error() {
 fn entries_without_a_known_inode() {
     // Several files may have lost their local identity at once.
     let mut db = StateDb::open_in_memory().expect("open");
-    let mut a = entry("a", 1, "d1", "h", "e");
-    let mut b = entry("b", 2, "d2", "h", "e");
-    a.inode = None;
-    b.inode = None;
+    let a = entry("a", None, "d1", "h", "e");
+    let b = entry("b", None, "d2", "h", "e");
     db.commit(
         &[BaseChange::Set(a.clone()), BaseChange::Set(b.clone())],
         &[],

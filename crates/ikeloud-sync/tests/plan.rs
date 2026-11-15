@@ -7,48 +7,13 @@
 #![allow(clippy::expect_used, clippy::panic)] // test code may panic
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
-use ikeloud_safety::{Action, Etag, RelPath};
+use ikeloud_safety::{Action, DEFAULT_SETTLE_TIME, Etag, LocalId, RelPath};
 use ikeloud_sync::names::key;
-use ikeloud_sync::{
-    BaseEntry, Collision, ContentHash, DocId, LocalFile, Plan, RemoteFile, Side, States, build_plan,
-};
+use ikeloud_sync::{BaseEntry, Collision, LocalFile, Plan, Side, States, build_plan};
+use ikeloud_testkit::{LOCAL_SIZE, REMOTE_SIZE, STABLE, base, id, local, p, remote, version};
 
 // --- helpers -----------------------------------------------------------------
-
-fn p(s: &str) -> RelPath {
-    RelPath::new(s)
-}
-
-fn local(path: &str, inode: u64, hash: &str) -> LocalFile {
-    LocalFile {
-        path: p(path),
-        inode,
-        hash: ContentHash::new(hash),
-        size: 7,
-        stable_for: Duration::from_secs(60),
-    }
-}
-
-fn remote(path: &str, doc: &str, etag: &str) -> RemoteFile {
-    RemoteFile {
-        path: p(path),
-        doc_id: DocId::new(doc),
-        etag: Etag::new(etag),
-        size: 9,
-    }
-}
-
-fn base(path: &str, inode: u64, doc: &str, hash: &str, etag: &str) -> BaseEntry {
-    BaseEntry {
-        path: p(path),
-        inode: Some(inode),
-        doc_id: DocId::new(doc),
-        hash: ContentHash::new(hash),
-        etag: Etag::new(etag),
-    }
-}
 
 /// Copy name following the spec's pattern, with a fixed date.
 fn copy_name(path: &RelPath, n: u32) -> RelPath {
@@ -78,7 +43,7 @@ fn replay_local(states: &States, plan: &Plan) {
         .collect();
     for action in &plan.actions {
         match action {
-            Action::MoveLocal { from, to } => {
+            Action::MoveLocal { from, to, .. } => {
                 assert!(
                     disk.remove(&key(from.as_str())).is_some(),
                     "move of a missing local file {from} in {plan:#?}"
@@ -92,17 +57,18 @@ fn replay_local(states: &States, plan: &Plan) {
             }
             Action::Download {
                 local: path,
-                overwrites_local,
+                replaces,
                 ..
             } => {
                 let taken = disk.contains_key(&key(path.as_str()));
                 assert_eq!(
-                    taken, *overwrites_local,
-                    "download to {path}: taken={taken} but overwrites_local={overwrites_local} in {plan:#?}"
+                    taken,
+                    replaces.is_some(),
+                    "download to {path}: taken={taken} but replaces={replaces:?} in {plan:#?}"
                 );
                 disk.insert(key(path.as_str()), path.as_str().to_string());
             }
-            Action::TrashLocal { path } => {
+            Action::TrashLocal { path, .. } => {
                 assert!(
                     disk.remove(&key(path.as_str())).is_some(),
                     "trash of a missing local file {path}"
@@ -114,38 +80,79 @@ fn replay_local(states: &States, plan: &Plan) {
 }
 
 fn plan(states: &States) -> Plan {
-    let result = build_plan(states, &copy_name);
+    plan_with(states, &copy_name)
+}
+
+fn plan_with(states: &States, name: &dyn Fn(&RelPath, u32) -> RelPath) -> Plan {
+    let result = build_plan(states, DEFAULT_SETTLE_TIME, name);
     replay_local(states, &result);
     result
 }
 
-fn upload(path: &str, etag: Option<&str>) -> Action {
-    upload_from(path, path, etag)
+/// Upload of local file number `n`.
+fn upload(path: &str, n: u64, etag: Option<&str>) -> Action {
+    upload_from(path, path, n, etag)
 }
 
-fn upload_from(local: &str, remote: &str, etag: Option<&str>) -> Action {
+fn upload_from(local: &str, remote: &str, n: u64, etag: Option<&str>) -> Action {
     Action::Upload {
         local: p(local),
         remote: p(remote),
+        local_id: id(n),
         expected_etag: etag.map(Etag::new),
-        size: 7,
-        stable_for: Duration::from_secs(60),
+        size: LOCAL_SIZE,
+        stable_for: STABLE,
     }
 }
 
-fn download(path: &str, overwrites: bool) -> Action {
+/// Download to a free local path.
+fn download(path: &str) -> Action {
     Action::Download {
         remote: p(path),
         local: p(path),
-        size: 9,
-        overwrites_local: overwrites,
+        size: REMOTE_SIZE,
+        replaces: None,
     }
 }
 
-fn move_local(from: &str, to: &str) -> Action {
+/// Download over local file number `n` with content `hash`.
+fn download_over(path: &str, n: u64, hash: &str) -> Action {
+    Action::Download {
+        remote: p(path),
+        local: p(path),
+        size: REMOTE_SIZE,
+        replaces: Some(version(n, hash)),
+    }
+}
+
+fn trash_local(path: &str, n: u64, hash: &str) -> Action {
+    Action::TrashLocal {
+        path: p(path),
+        expected: version(n, hash),
+    }
+}
+
+fn trash_remote(path: &str, etag: &str) -> Action {
+    Action::TrashRemote {
+        path: p(path),
+        expected_etag: Etag::new(etag),
+    }
+}
+
+fn move_local(from: &str, to: &str, n: u64) -> Action {
     Action::MoveLocal {
         from: p(from),
         to: p(to),
+        local_id: id(n),
+    }
+}
+
+fn conflict_copy(path: &str, n: u64) -> Action {
+    Action::UploadConflictCopy {
+        path: p(path),
+        local_id: id(n),
+        size: LOCAL_SIZE,
+        stable_for: STABLE,
     }
 }
 
@@ -157,17 +164,13 @@ fn move_remote(from: &str, to: &str, etag: &str) -> Action {
     }
 }
 
-fn conflict(path: &str, download_too: bool) -> Vec<Action> {
+/// Local file number `n` kept as a conflict copy (and the server version
+/// downloaded in its place).
+fn conflict(path: &str, n: u64, download_too: bool) -> Vec<Action> {
     let c = copy(path);
-    let mut a = vec![
-        move_local(path, &c),
-        Action::UploadConflictCopy {
-            path: p(&c),
-            size: 7,
-        },
-    ];
+    let mut a = vec![move_local(path, &c, n), conflict_copy(&c, n)];
     if download_too {
-        a.push(download(path, false));
+        a.push(download(path));
     }
     a
 }
@@ -192,38 +195,35 @@ fn decision_table() {
             Some("h2"),
             Some("e1"),
             true,
-            vec![upload("a", Some("e1"))],
+            vec![upload("a", 1, Some("e1"))],
         ),
         (
             "changed only on iCloud",
             Some("h1"),
             Some("e2"),
             true,
-            vec![download("a", true)],
+            vec![download_over("a", 1, "h1")],
         ),
         (
             "changed on both",
             Some("h2"),
             Some("e2"),
             true,
-            conflict("a", true),
+            conflict("a", 1, true),
         ),
         (
             "deleted on Linux",
             None,
             Some("e1"),
             true,
-            vec![Action::TrashRemote {
-                path: p("a"),
-                expected_etag: Etag::new("e1"),
-            }],
+            vec![trash_remote("a", "e1")],
         ),
         (
             "deleted on iCloud",
             Some("h1"),
             None,
             true,
-            vec![Action::TrashLocal { path: p("a") }],
+            vec![trash_local("a", 1, "h1")],
         ),
         ("deleted on both", None, None, true, vec![]),
         (
@@ -231,14 +231,14 @@ fn decision_table() {
             None,
             Some("e2"),
             true,
-            vec![download("a", false)],
+            vec![download("a")],
         ),
         (
             "changed on Linux, deleted on iCloud",
             Some("h2"),
             None,
             true,
-            conflict("a", false),
+            conflict("a", 1, false),
         ),
         // No common state (the file is new).
         (
@@ -246,21 +246,21 @@ fn decision_table() {
             Some("h1"),
             None,
             false,
-            vec![upload("a", None)],
+            vec![upload("a", 1, None)],
         ),
         (
             "new only on iCloud",
             None,
             Some("e1"),
             false,
-            vec![download("a", false)],
+            vec![download("a")],
         ),
         (
             "new on both",
             Some("h1"),
             Some("e1"),
             false,
-            conflict("a", true),
+            conflict("a", 1, true),
         ),
     ];
     for (name, l, r, with_base, expected) in cases {
@@ -289,8 +289,10 @@ fn deleted_on_both_needs_no_action() {
 
 #[test]
 fn modification_time_does_not_decide() {
+    // Unchanged content counts as unchanged however recently it was touched
+    // (the file is left alone only while it is being written).
     let mut l = local("a", 1, "h1");
-    l.stable_for = Duration::ZERO;
+    l.stable_for = DEFAULT_SETTLE_TIME;
     let states = States {
         local: vec![l],
         remote: vec![remote("a", "d1", "e1")],
@@ -308,7 +310,7 @@ fn saving_with_a_new_inode_is_not_a_new_file() {
         (
             "new inode and new content: an ordinary upload",
             "h2",
-            vec![upload("report.odt", Some("e1"))],
+            vec![upload("report.odt", 77, Some("e1"))],
         ),
         ("new inode, same content: nothing to do", "h1", vec![]),
     ];
@@ -339,13 +341,209 @@ fn a_known_inode_on_another_path_is_not_taken_for_a_resave() {
     };
     let result = plan(&states);
     assert!(
-        result.actions.contains(&Action::TrashRemote {
-            path: p("a"),
-            expected_etag: Etag::new("e1")
-        }),
+        result.actions.contains(&trash_remote("a", "e1")),
         "a was deleted locally: {:#?}",
         result.actions
     );
+}
+
+// --- identity: reused inodes --------------------------------------------------------
+
+/// Local file `inode` on device 1 with the given birth time.
+fn reborn(path: &str, inode: u64, birth_ns: Option<i64>, hash: &str) -> LocalFile {
+    LocalFile {
+        id: LocalId {
+            device: 1,
+            inode,
+            birth_ns,
+        },
+        ..local(path, inode, hash)
+    }
+}
+
+fn entry_born(path: &str, birth_ns: Option<i64>, hash: &str) -> BaseEntry {
+    BaseEntry {
+        local: Some(LocalId {
+            device: 1,
+            inode: 1,
+            birth_ns,
+        }),
+        ..base(path, 1, "d1", hash, "e1")
+    }
+}
+
+#[test]
+fn a_reused_inode_is_not_the_old_file() {
+    // "a" (inode 1) was deleted; a new, unrelated file got inode 1. Pairing by
+    // inode alone would upload its content over document d1. Found by the
+    // independent review.
+    let upload_of = |l: &LocalFile, etag: Option<&str>| Action::Upload {
+        local: l.path.clone(),
+        remote: l.path.clone(),
+        local_id: l.id,
+        expected_etag: etag.map(Etag::new),
+        size: LOCAL_SIZE,
+        stable_for: STABLE,
+    };
+    let gone_and_new = |x: &LocalFile| vec![trash_remote("a", "e1"), upload_of(x, None)];
+    let new_x = reborn("x", 1, Some(2), "hx");
+    let new_x_no_birth = reborn("x", 1, None, "hx");
+    let edited_a = reborn("a", 1, None, "hx");
+    // (name, base entry birth, scanned file, expected)
+    let cases: Vec<(&str, Option<i64>, LocalFile, Vec<Action>)> = vec![
+        (
+            "birth times differ: a new file",
+            Some(1),
+            new_x.clone(),
+            gone_and_new(&new_x),
+        ),
+        (
+            "birth times equal: the same file, moved and edited (content first)",
+            Some(1),
+            reborn("x", 1, Some(1), "hx"),
+            vec![upload_from("x", "a", 1, Some("e1"))],
+        ),
+        (
+            "no birth time, other path and content: taken for a new file",
+            None,
+            new_x_no_birth.clone(),
+            gone_and_new(&new_x_no_birth),
+        ),
+        (
+            "no birth time, other path, same content: a move",
+            None,
+            reborn("x", 1, None, "h1"),
+            vec![move_remote("a", "x", "e1")],
+        ),
+        (
+            "no birth time, same path, other content: an edit",
+            None,
+            edited_a.clone(),
+            vec![upload_of(&edited_a, Some("e1"))],
+        ),
+    ];
+    for (name, birth, scanned, expected) in cases {
+        let states = States {
+            local: vec![scanned],
+            remote: vec![remote("a", "d1", "e1")],
+            base: vec![entry_born("a", birth, "h1")],
+            ..States::default()
+        };
+        assert_eq!(plan(&states).actions, expected, "{name}");
+    }
+}
+
+// --- files left alone -----------------------------------------------------------------
+
+#[test]
+fn files_being_written_are_left_alone_on_both_sides() {
+    let busy = |path: &str, n: u64, hash: &str| LocalFile {
+        stable_for: DEFAULT_SETTLE_TIME / 2,
+        ..local(path, n, hash)
+    };
+    let cases: Vec<(&str, States)> = vec![
+        (
+            "a known file edited on both sides: no conflict copy yet",
+            States {
+                local: vec![busy("a", 1, "h2")],
+                remote: vec![remote("a", "d1", "e2")],
+                base: vec![base("a", 1, "d1", "h1", "e1")],
+                ..States::default()
+            },
+        ),
+        (
+            "changed only on iCloud: not downloaded over the file being written",
+            States {
+                local: vec![busy("a", 1, "h1")],
+                remote: vec![remote("a", "d1", "e2")],
+                base: vec![base("a", 1, "d1", "h1", "e1")],
+                ..States::default()
+            },
+        ),
+        (
+            "a new file with a new server file of the same name: no eviction",
+            States {
+                local: vec![busy("a", 1, "h1")],
+                remote: vec![remote("a", "d1", "e1")],
+                ..States::default()
+            },
+        ),
+        (
+            "a new file: not uploaded yet",
+            States {
+                local: vec![busy("a", 1, "h1")],
+                ..States::default()
+            },
+        ),
+    ];
+    for (name, states) in cases {
+        let result = plan(&states);
+        assert_eq!(result.actions, vec![], "{name}");
+        assert_eq!(result.busy, vec![p("a")], "{name}");
+    }
+}
+
+#[test]
+fn renaming_a_known_file_to_an_ignored_name_does_not_delete_it() {
+    // "report.odt" renamed locally to "report.odt.part" (never synced). The
+    // server copy must stay; found by the independent review.
+    for ignored in ["report.odt.part", ".report.odt.swp", ".~lock.report.odt#"] {
+        let states = States {
+            local: vec![local(ignored, 1, "h1")],
+            remote: vec![remote("report.odt", "d1", "e1")],
+            base: vec![base("report.odt", 1, "d1", "h1", "e1")],
+            ..States::default()
+        };
+        assert_eq!(plan(&states).actions, vec![], "{ignored}");
+    }
+}
+
+// --- conflict copy names from a translation ----------------------------------------------
+
+#[test]
+fn a_translation_without_the_number_cannot_hang_the_planner() {
+    // Two conflicts, but the translated name ignores the attempt number:
+    // the second file gets no free name and is left alone (reported).
+    let states = States {
+        local: vec![local("a", 1, "h2"), local("b", 2, "h2")],
+        remote: vec![remote("a", "d1", "e2"), remote("b", "d2", "e2")],
+        base: vec![
+            base("a", 1, "d1", "h1", "e1"),
+            base("b", 2, "d2", "h1", "e1"),
+        ],
+        ..States::default()
+    };
+    let constant = |_: &RelPath, _: u32| p("copy");
+    let result = plan_with(&states, &constant);
+    assert_eq!(
+        result.actions,
+        vec![
+            move_local("a", "copy", 1),
+            conflict_copy("copy", 1),
+            download("a")
+        ]
+    );
+    assert_eq!(result.no_copy_name, vec![p("b")]);
+}
+
+#[test]
+fn copy_names_that_would_not_sync_are_refused() {
+    let states = States {
+        local: vec![local("d/a", 1, "h2")],
+        remote: vec![remote("d/a", "d1", "e2")],
+        base: vec![base("d/a", 1, "d1", "h1", "e1")],
+        ..States::default()
+    };
+    type Naming = dyn Fn(&RelPath, u32) -> RelPath;
+    let cases: Vec<(&str, &Naming)> = vec![
+        ("an ignored name", &|_, n| p(&format!("d/a {n}.part"))),
+        ("another folder", &|_, n| p(&format!("e/a {n}"))),
+    ];
+    for (name, naming) in cases {
+        let result = plan_with(&states, naming);
+        assert_eq!(result.actions, vec![], "{name}");
+        assert_eq!(result.no_copy_name, vec![p("d/a")], "{name}");
+    }
 }
 
 // --- moves ---------------------------------------------------------------------------
@@ -366,13 +564,13 @@ fn moves() {
             "moved only on iCloud",
             "a",
             "dir/b",
-            vec![move_local("a", "dir/b")],
+            vec![move_local("a", "dir/b", 1)],
         ),
         (
             "moved on both, differently: iCloud wins",
             "c",
             "b",
-            vec![move_local("c", "b")],
+            vec![move_local("c", "b", 1)],
         ),
         ("moved on both the same way", "b", "b", vec![]),
         (
@@ -385,7 +583,7 @@ fn moves() {
             "renamed on iCloud to another letter case",
             "a",
             "A",
-            vec![move_local("a", "A")],
+            vec![move_local("a", "A", 1)],
         ),
     ];
     for (name, l, r, expected) in cases {
@@ -431,7 +629,7 @@ fn content_first_then_path() {
     };
     assert_eq!(
         plan(&states).actions,
-        vec![upload_from("b", "a", Some("e1"))]
+        vec![upload_from("b", "a", 1, Some("e1"))]
     );
 }
 
@@ -449,9 +647,9 @@ fn icloud_move_onto_a_local_new_file() {
     assert_eq!(
         plan(&states).actions,
         vec![
-            move_local("b", &copy("b")),
-            move_local("a", "b"),
-            upload(&copy("b"), None),
+            move_local("b", &copy("b"), 9),
+            move_local("a", "b", 1),
+            upload(&copy("b"), 9, None),
         ],
         "the local file makes room, is uploaded under its copy name, and is never moved twice"
     );
@@ -471,7 +669,7 @@ fn local_move_onto_a_name_taken_on_icloud() {
     };
     let actions = plan(&states).actions;
     assert!(
-        actions.contains(&move_local("b", &copy("b"))),
+        actions.contains(&move_local("b", &copy("b"), 1)),
         "{actions:#?}"
     );
     assert!(
@@ -497,11 +695,14 @@ fn new_local_file_onto_a_name_taken_on_icloud() {
     };
     let actions = plan(&states).actions;
     assert!(
-        actions.contains(&move_local("B", &copy("B"))),
+        actions.contains(&move_local("B", &copy("B"), 9)),
         "{actions:#?}"
     );
-    assert!(actions.contains(&move_local("a", "b")), "{actions:#?}");
-    assert!(actions.contains(&upload(&copy("B"), None)), "{actions:#?}");
+    assert!(actions.contains(&move_local("a", "b", 1)), "{actions:#?}");
+    assert!(
+        actions.contains(&upload(&copy("B"), 9, None)),
+        "{actions:#?}"
+    );
 }
 
 #[test]
@@ -539,7 +740,7 @@ fn pairing_new_files_after_normalization() {
                 local: vec![local(nfd, 1, "h1")],
                 ..States::default()
             },
-            vec![upload_from(nfd, "Příloha.pdf", None)],
+            vec![upload_from(nfd, "Příloha.pdf", 1, None)],
         ),
         (
             "NFD locally and NFC on iCloud, both new: the same name",
@@ -549,12 +750,9 @@ fn pairing_new_files_after_normalization() {
                 ..States::default()
             },
             vec![
-                move_local(nfd, &copy(nfd)),
-                Action::UploadConflictCopy {
-                    path: p(&copy(nfd)),
-                    size: 7,
-                },
-                download("Příloha.pdf", false),
+                move_local(nfd, &copy(nfd), 1),
+                conflict_copy(&copy(nfd), 1),
+                download("Příloha.pdf"),
             ],
         ),
     ];
@@ -578,7 +776,7 @@ fn local_collisions_are_skipped() {
     let result = plan(&states);
     assert_eq!(
         result.actions,
-        vec![upload("b.txt", None)],
+        vec![upload("b.txt", 3, None)],
         "colliding files are not synced"
     );
     assert_eq!(
@@ -658,12 +856,9 @@ fn conflict_copy_gets_a_free_name() {
     assert_eq!(
         plan(&states).actions,
         vec![
-            move_local("report.odt", second),
-            Action::UploadConflictCopy {
-                path: p(second),
-                size: 7
-            },
-            download("report.odt", false),
+            move_local("report.odt", second, 1),
+            conflict_copy(second, 1),
+            download("report.odt"),
         ]
     );
 }
@@ -680,7 +875,7 @@ fn missing_folders_are_created_first() {
                 local: vec![local("a/b/c.txt", 1, "h")],
                 ..States::default()
             },
-            vec![folder("a"), folder("a/b"), upload("a/b/c.txt", None)],
+            vec![folder("a"), folder("a/b"), upload("a/b/c.txt", 1, None)],
         ),
         (
             "folder already on the server (as a folder)",
@@ -689,7 +884,7 @@ fn missing_folders_are_created_first() {
                 remote_folders: vec![p("a"), p("A/B")],
                 ..States::default()
             },
-            vec![upload("a/b/c.txt", None)],
+            vec![upload("a/b/c.txt", 1, None)],
         ),
         (
             "server folder seen from a file inside it",
@@ -699,7 +894,7 @@ fn missing_folders_are_created_first() {
                 base: vec![base("a/old.txt", 2, "d2", "x", "e")],
                 ..States::default()
             },
-            vec![upload("a/new.txt", None)],
+            vec![upload("a/new.txt", 1, None)],
         ),
         (
             "two files in the same new folder, folder once",
@@ -707,7 +902,7 @@ fn missing_folders_are_created_first() {
                 local: vec![local("s/1", 1, "h"), local("s/2", 2, "h")],
                 ..States::default()
             },
-            vec![folder("s"), upload("s/1", None), upload("s/2", None)],
+            vec![folder("s"), upload("s/1", 1, None), upload("s/2", 2, None)],
         ),
         (
             "a move into a new folder creates it",

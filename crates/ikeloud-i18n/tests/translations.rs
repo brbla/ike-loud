@@ -34,6 +34,7 @@ fn all_messages() -> Vec<Message> {
         (0..120)
             .map(|i| Action::TrashLocal {
                 path: RelPath::new(format!("f{i}")),
+                expected: ikeloud_testkit::version(i, "h"),
             })
             .collect(),
         &c,
@@ -414,36 +415,23 @@ fn slash_from_a_translation_stays_in_the_folder() {
 
 #[test]
 fn planner_with_a_translated_copy_name() {
-    use ikeloud_safety::Etag;
-    use ikeloud_sync::{BaseEntry, ContentHash, DocId, LocalFile, RemoteFile, States, build_plan};
+    use ikeloud_safety::DEFAULT_SETTLE_TIME;
+    use ikeloud_sync::{States, build_plan};
+    use ikeloud_testkit::{base, local, remote};
 
     let cs = lang("cs");
     let states = States {
-        local: vec![LocalFile {
-            path: RelPath::new("zprava.odt"),
-            inode: 1,
-            hash: ContentHash::new("h2"),
-            size: 1,
-            stable_for: std::time::Duration::from_secs(60),
-        }],
-        remote: vec![RemoteFile {
-            path: RelPath::new("zprava.odt"),
-            doc_id: DocId::new("d1"),
-            etag: Etag::new("e2"),
-            size: 1,
-        }],
-        base: vec![BaseEntry {
-            path: RelPath::new("zprava.odt"),
-            inode: Some(1),
-            doc_id: DocId::new("d1"),
-            hash: ContentHash::new("h1"),
-            etag: Etag::new("e1"),
-        }],
+        local: vec![local("zprava.odt", 1, "h2")],
+        remote: vec![remote("zprava.odt", "d1", "e2")],
+        base: vec![base("zprava.odt", 1, "d1", "h1", "e1")],
         ..States::default()
     };
-    let plan = build_plan(&states, &|p, n| cs.conflict_copy_name(p, "2026-11-15", n));
-    assert!(plan.actions.contains(&Action::UploadConflictCopy {
-        path: RelPath::new("zprava (konflikt Linux 2026-11-15).odt"),
-        size: 1,
-    }));
+    let plan = build_plan(&states, DEFAULT_SETTLE_TIME, &|p, n| {
+        cs.conflict_copy_name(p, "2026-11-15", n)
+    });
+    assert!(plan.actions.iter().any(|a| matches!(
+        a,
+        Action::UploadConflictCopy { path, .. }
+            if path.as_str() == "zprava (konflikt Linux 2026-11-15).odt"
+    )));
 }

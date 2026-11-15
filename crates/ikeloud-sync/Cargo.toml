@@ -14,3 +14,6 @@ workspace = true
 ikeloud-safety = { path = "../ikeloud-safety" }
 # Name normalization (NFC): "Příloha" from a Mac and from Linux is the same file. Single wrapper.
 unicode-normalization = { version = "=0.1.25", default-features = false }
+
+[dev-dependencies]
+ikeloud-testkit = { path = "../ikeloud-testkit" }

@@ -2,9 +2,9 @@
 
 use std::path::Path;
 
-use ikeloud_safety::{Etag, RelPath};
+use ikeloud_safety::{ContentHash, Etag, LocalId, RelPath};
 use ikeloud_sync::names::key;
-use ikeloud_sync::{BaseEntry, ContentHash, DocId};
+use ikeloud_sync::{BaseEntry, DocId};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{BaseChange, JournalEntry, JournalKind, StateError};
@@ -14,12 +14,18 @@ pub const SCHEMA_VERSION: i64 = 1;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE base (
-    doc_id TEXT PRIMARY KEY NOT NULL CHECK (doc_id <> ''),
-    inode  INTEGER UNIQUE,
-    key    TEXT NOT NULL UNIQUE,
-    path   TEXT NOT NULL CHECK (path <> ''),
-    hash   TEXT NOT NULL CHECK (hash <> ''),
-    etag   TEXT NOT NULL CHECK (etag <> '')
+    doc_id     TEXT PRIMARY KEY NOT NULL CHECK (doc_id <> ''),
+    device     INTEGER,
+    inode      INTEGER,
+    birth_ns   INTEGER,
+    key        TEXT NOT NULL UNIQUE,
+    path       TEXT NOT NULL CHECK (path <> ''),
+    local_path TEXT NOT NULL CHECK (local_path <> ''),
+    hash       TEXT NOT NULL CHECK (hash <> ''),
+    etag       TEXT NOT NULL CHECK (etag <> ''),
+    UNIQUE (device, inode),
+    CHECK ((device IS NULL) = (inode IS NULL)),
+    CHECK (inode IS NOT NULL OR birth_ns IS NULL)
 ) STRICT;
 CREATE TABLE journal (
     id     INTEGER PRIMARY KEY,
@@ -96,7 +102,7 @@ impl StateDb {
     pub fn base(&self) -> Result<Vec<BaseEntry>, StateError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT path, inode, doc_id, hash, etag FROM base ORDER BY key")
+            .prepare(&format!("SELECT {BASE_COLUMNS} FROM base ORDER BY key"))
             .map_err(sql)?;
         let rows = stmt.query_map([], base_row).map_err(sql)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(sql)
@@ -106,7 +112,7 @@ impl StateDb {
     pub fn base_entry(&self, path: &RelPath) -> Result<Option<BaseEntry>, StateError> {
         self.conn
             .query_row(
-                "SELECT path, inode, doc_id, hash, etag FROM base WHERE key = ?1",
+                &format!("SELECT {BASE_COLUMNS} FROM base WHERE key = ?1"),
                 params![key(path.as_str())],
                 base_row,
             )
@@ -136,16 +142,22 @@ impl StateDb {
         }
         for change in changes {
             if let BaseChange::Set(e) = change {
+                check_entry(&tx, e)?;
                 tx.execute(
-                    "INSERT INTO base (doc_id, inode, key, path, hash, etag)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    &format!(
+                        "INSERT INTO base ({BASE_COLUMNS}, key)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+                    ),
                     params![
-                        e.doc_id.as_str(),
-                        e.inode.map(inode_to_sql),
-                        key(e.path.as_str()),
                         e.path.as_str(),
+                        e.local_path.as_str(),
+                        e.local.map(|id| u64_to_sql(id.device)),
+                        e.local.map(|id| u64_to_sql(id.inode)),
+                        e.local.and_then(|id| id.birth_ns),
+                        e.doc_id.as_str(),
                         e.hash.as_str(),
-                        e.etag.as_str()
+                        e.etag.as_str(),
+                        key(e.path.as_str()),
                     ],
                 )
                 .map_err(sql)?;
@@ -153,7 +165,7 @@ impl StateDb {
         }
         for entry in journal {
             let time = i64::try_from(entry.time)
-                .map_err(|_| StateError::Sql(format!("time {} out of range", entry.time)))?;
+                .map_err(|_| StateError::InvalidValue { field: "time" })?;
             tx.execute(
                 "INSERT INTO journal (time, kind, path, target) VALUES (?1, ?2, ?3, ?4)",
                 params![
@@ -208,22 +220,84 @@ impl StateDb {
     }
 }
 
+/// Checks an entry against the state stored so far in this transaction, so
+/// that a broken invariant is reported as what it is. The schema enforces
+/// the same rules as a backstop.
+fn check_entry(tx: &rusqlite::Transaction<'_>, e: &BaseEntry) -> Result<(), StateError> {
+    let empty = [
+        ("doc_id", e.doc_id.as_str()),
+        ("path", e.path.as_str()),
+        ("local_path", e.local_path.as_str()),
+        ("hash", e.hash.as_str()),
+        ("etag", e.etag.as_str()),
+    ]
+    .into_iter()
+    .find(|(_, value)| value.is_empty());
+    if let Some((field, _)) = empty {
+        return Err(StateError::InvalidValue { field });
+    }
+    let name_taken = tx
+        .query_row(
+            "SELECT 1 FROM base WHERE key = ?1",
+            params![key(e.path.as_str())],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(sql)?
+        .is_some();
+    if name_taken {
+        return Err(StateError::NameTaken {
+            path: e.path.clone(),
+        });
+    }
+    if let Some(id) = e.local {
+        let file_taken = tx
+            .query_row(
+                "SELECT 1 FROM base WHERE device = ?1 AND inode = ?2",
+                params![u64_to_sql(id.device), u64_to_sql(id.inode)],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(sql)?
+            .is_some();
+        if file_taken {
+            return Err(StateError::LocalFileTaken {
+                path: e.path.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Columns of a common-state entry, in the order `base_row` reads them.
+const BASE_COLUMNS: &str = "path, local_path, device, inode, birth_ns, doc_id, hash, etag";
+
 fn base_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BaseEntry> {
+    let device: Option<i64> = r.get(2)?;
+    let inode: Option<i64> = r.get(3)?;
+    let birth_ns: Option<i64> = r.get(4)?;
+    // The schema guarantees device and inode are both set or both NULL.
+    let local = device.zip(inode).map(|(device, inode)| LocalId {
+        device: u64_from_sql(device),
+        inode: u64_from_sql(inode),
+        birth_ns,
+    });
     Ok(BaseEntry {
         path: RelPath::new(r.get::<_, String>(0)?),
-        inode: r.get::<_, Option<i64>>(1)?.map(inode_from_sql),
-        doc_id: DocId::new(r.get::<_, String>(2)?),
-        hash: ContentHash::new(r.get::<_, String>(3)?),
-        etag: Etag::new(r.get::<_, String>(4)?),
+        local_path: RelPath::new(r.get::<_, String>(1)?),
+        local,
+        doc_id: DocId::new(r.get::<_, String>(5)?),
+        hash: ContentHash::new(r.get::<_, String>(6)?),
+        etag: Etag::new(r.get::<_, String>(7)?),
     })
 }
 
-/// SQLite integers are signed; inodes are stored bit for bit.
-fn inode_to_sql(inode: u64) -> i64 {
-    i64::from_ne_bytes(inode.to_ne_bytes())
+/// SQLite integers are signed; device and inode numbers are stored bit for bit.
+fn u64_to_sql(value: u64) -> i64 {
+    i64::from_ne_bytes(value.to_ne_bytes())
 }
 
-fn inode_from_sql(value: i64) -> u64 {
+fn u64_from_sql(value: i64) -> u64 {
     u64::from_ne_bytes(value.to_ne_bytes())
 }
 
@@ -290,7 +364,8 @@ mod tests {
             let mut conn = rusqlite::Connection::open(&path).expect("raw open");
             let tx = conn.transaction().expect("begin");
             tx.execute(
-                "INSERT INTO base (doc_id, inode, key, path, hash, etag) VALUES ('d', 1, 'a', 'a', 'h', 'e')",
+                "INSERT INTO base (doc_id, device, inode, key, path, local_path, hash, etag)
+                 VALUES ('d', 1, 1, 'a', 'a', 'a', 'h', 'e')",
                 [],
             )
             .expect("insert");

@@ -3,12 +3,10 @@
 #![allow(clippy::expect_used, clippy::panic)] // test code may panic
 
 use std::collections::VecDeque;
-use std::time::Duration;
 
-use ikeloud_safety::{Action, ApprovedAction, Context, Decision, Etag, RelPath, assess};
-use ikeloud_sync::{
-    ContentHash, DocId, EffectError, Effects, Report, StopReason, Transfer, execute,
-};
+use ikeloud_safety::{Action, ApprovedAction, Context, Decision, assess};
+use ikeloud_sync::{EffectError, Effects, Report, StopReason, Transfer, execute};
+use ikeloud_testkit::{LOCAL_SIZE, STABLE, id, p};
 
 /// Effects that answer from a script and record what they were asked to do.
 struct Scripted {
@@ -27,11 +25,12 @@ impl Effects for Scripted {
 
 fn upload(path: &str) -> Action {
     Action::Upload {
-        local: RelPath::new(path),
-        remote: RelPath::new(path),
+        local: p(path),
+        remote: p(path),
+        local_id: id(1),
         expected_etag: None,
-        size: 1,
-        stable_for: Duration::from_secs(60),
+        size: LOCAL_SIZE,
+        stable_for: STABLE,
     }
 }
 
@@ -44,12 +43,7 @@ fn approved(actions: Vec<Action>) -> Vec<ApprovedAction> {
 }
 
 fn transfer(doc: &str) -> Transfer {
-    Transfer {
-        doc_id: DocId::new(doc),
-        etag: Etag::new("e"),
-        inode: 1,
-        hash: ContentHash::new("h"),
-    }
+    ikeloud_testkit::transfer(doc, "e", 1, "h")
 }
 
 #[test]

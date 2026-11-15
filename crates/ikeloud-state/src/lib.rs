@@ -30,6 +30,24 @@ pub enum StateError {
         /// Newest version this build understands.
         supported: i64,
     },
+    /// Two documents would have the same name (after normalization). The
+    /// commit was rolled back.
+    NameTaken {
+        /// The name.
+        path: RelPath,
+    },
+    /// Two documents would have the same local file. The commit was rolled
+    /// back.
+    LocalFileTaken {
+        /// The name of the second document.
+        path: RelPath,
+    },
+    /// An entry or journal entry with an empty or out-of-range value. The
+    /// commit was rolled back.
+    InvalidValue {
+        /// Which value.
+        field: &'static str,
+    },
     /// A stored row has a value this build does not understand.
     CorruptRow {
         /// Table name.

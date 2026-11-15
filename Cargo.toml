@@ -9,6 +9,7 @@ members = [
     "crates/ikeloud-cli",
     "crates/ikeloud-i18n",
     "crates/ikeloud-state",
+    "crates/ikeloud-testkit",
 ]
 
 [workspace.package]
@@ -38,3 +39,15 @@ print_stderr = "warn"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# The deterministic simulation (ikeloud-sync/tests/simulation.rs) runs
+# thousands of sync rounds; optimized it takes seconds instead of half a
+# minute, and the rest of the debug build stays fast to compile.
+[profile.dev.package.ikeloud-sync]
+opt-level = 2
+
+[profile.dev.package.ikeloud-safety]
+opt-level = 2
+
+[profile.dev.package.unicode-normalization]
+opt-level = 2

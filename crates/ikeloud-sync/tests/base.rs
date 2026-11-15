@@ -3,50 +3,9 @@
 
 #![allow(clippy::expect_used, clippy::panic)] // test code may panic
 
-use std::time::Duration;
-
-use ikeloud_safety::{Etag, RelPath};
-use ikeloud_sync::{
-    BaseEntry, ContentHash, DocId, LocalFile, RemoteFile, States, Transfer, next_base,
-};
-
-fn local(path: &str, inode: u64, hash: &str) -> LocalFile {
-    LocalFile {
-        path: RelPath::new(path),
-        inode,
-        hash: ContentHash::new(hash),
-        size: 1,
-        stable_for: Duration::from_secs(60),
-    }
-}
-
-fn remote(path: &str, doc: &str, etag: &str) -> RemoteFile {
-    RemoteFile {
-        path: RelPath::new(path),
-        doc_id: DocId::new(doc),
-        etag: Etag::new(etag),
-        size: 1,
-    }
-}
-
-fn base(path: &str, inode: Option<u64>, doc: &str, hash: &str, etag: &str) -> BaseEntry {
-    BaseEntry {
-        path: RelPath::new(path),
-        inode,
-        doc_id: DocId::new(doc),
-        hash: ContentHash::new(hash),
-        etag: Etag::new(etag),
-    }
-}
-
-fn transfer(doc: &str, etag: &str, inode: u64, hash: &str) -> Transfer {
-    Transfer {
-        doc_id: DocId::new(doc),
-        etag: Etag::new(etag),
-        inode,
-        hash: ContentHash::new(hash),
-    }
-}
+use ikeloud_safety::LocalId;
+use ikeloud_sync::{BaseEntry, LocalFile, RemoteFile, States, Transfer, next_base};
+use ikeloud_testkit::{base, local, remote, transfer};
 
 #[test]
 fn next_common_state() {
@@ -90,17 +49,46 @@ fn next_common_state() {
             local: vec![local(nfd, 5, "h5")],
             remote: vec![remote("Příloha", "d5", "e5")],
             transfers: vec![transfer("d5", "e5", 5, "h5")],
-            expected: vec![base("Příloha", Some(5), "d5", "h5", "e5")],
+            // The local name stays as it is on disk (NFD).
+            expected: vec![BaseEntry {
+                local_path: ikeloud_testkit::p(nfd),
+                ..base("Příloha", Some(5), "d5", "h5", "e5")
+            }],
         },
         Case {
-            name: "download to another place (moved on one side): content learned, path kept",
+            name: "transfer while both sides moved apart: the path the local file holds",
             old: vec![base("a", Some(1), "d1", "h1", "e1")],
             local: vec![local("mine", 9, "h2"), local("a (copy)", 1, "hx")],
             remote: vec![remote("moved", "d1", "e2"), remote("a (copy)", "d7", "e7")],
             transfers: vec![transfer("d7", "e7", 1, "hx"), transfer("d1", "e2", 9, "h2")],
             expected: vec![
-                base("a", Some(9), "d1", "h2", "e2"),
                 base("a (copy)", Some(1), "d7", "hx", "e7"),
+                base("mine", Some(9), "d1", "h2", "e2"),
+            ],
+        },
+        Case {
+            name: "transfer while moved only locally: the old path (the server file holds it)",
+            old: vec![base("a", Some(1), "d1", "h1", "e1")],
+            local: vec![local("mine", 1, "h2")],
+            remote: vec![remote("a", "d1", "e2")],
+            transfers: vec![transfer("d1", "e2", 1, "h2")],
+            expected: vec![BaseEntry {
+                local_path: ikeloud_testkit::p("mine"),
+                ..base("a", Some(1), "d1", "h2", "e2")
+            }],
+        },
+        Case {
+            name: "the old path taken by another document meanwhile: never kept for this one",
+            old: vec![base("b", Some(1), "d1", "h1", "e1")],
+            local: vec![local("Příloha", 10, "h9"), local("b", 12, "h6")],
+            remote: vec![remote("c", "d1", "e9"), remote("b", "d6", "e6")],
+            transfers: vec![
+                transfer("d1", "e9", 10, "h9"),
+                transfer("d6", "e6", 12, "h6"),
+            ],
+            expected: vec![
+                base("b", Some(12), "d6", "h6", "e6"),
+                base("Příloha", Some(10), "d1", "h9", "e9"),
             ],
         },
         Case {
@@ -161,6 +149,28 @@ fn next_common_state() {
                 base("a", None, "d1", "h1", "e1"),
                 base("b", Some(1), "d2", "hb", "eb"),
             ],
+        },
+        Case {
+            name: "local file gone: its identity is forgotten (the inode may be reused)",
+            old: vec![base("a", Some(1), "d1", "h1", "e1")],
+            local: vec![],
+            remote: vec![remote("a", "d1", "e1")],
+            transfers: vec![],
+            expected: vec![base("a", None, "d1", "h1", "e1")],
+        },
+        Case {
+            name: "a reused inode (another birth time) is not the entry's file",
+            old: vec![base("a", Some(1), "d1", "h1", "e1")],
+            local: vec![LocalFile {
+                id: LocalId {
+                    birth_ns: Some(99),
+                    ..ikeloud_testkit::id(1)
+                },
+                ..local("x", 1, "hx")
+            }],
+            remote: vec![remote("a", "d1", "e1")],
+            transfers: vec![],
+            expected: vec![base("a", None, "d1", "h1", "e1")],
         },
         Case {
             name: "the last transfer of a document wins",

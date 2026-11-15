@@ -9,10 +9,12 @@
 pub mod base;
 pub mod execute;
 pub mod names;
+mod pairing;
 pub mod plan;
 pub mod state;
 
 pub use base::{Transfer, next_base};
 pub use execute::{EffectError, Effects, Report, StopReason, execute};
+pub use ikeloud_safety::{ContentHash, LocalId};
 pub use plan::{Collision, Plan, Side, build_plan};
-pub use state::{BaseEntry, ContentHash, DocId, LocalFile, RemoteFile, States};
+pub use state::{BaseEntry, DocId, LocalFile, RemoteFile, States};

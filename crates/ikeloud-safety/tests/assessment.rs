@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use ikeloud_safety::names::NameError;
 use ikeloud_safety::{
-    Action, Context, Decision, DeferReason, Etag, LocalFolderState, Mode, ReadOnlyReason,
-    Rejection, RelPath, assess,
+    Action, ContentHash, Context, Decision, DeferReason, Destruction, DestructionKind, Etag,
+    LocalFolderState, LocalId, LocalVersion, Mode, ReadOnlyReason, Rejection, RelPath, assess,
 };
 
 // --- helpers -----------------------------------------------------------------
@@ -22,23 +22,59 @@ fn e(s: &str) -> Etag {
     Etag::new(s)
 }
 
+const ID: LocalId = LocalId {
+    device: 1,
+    inode: 1,
+    birth_ns: None,
+};
+
+fn version(hash: &str) -> LocalVersion {
+    LocalVersion {
+        id: ID,
+        hash: ContentHash::new(hash),
+    }
+}
+
 fn upload(path: &str, etag: Option<&str>) -> Action {
+    upload_full(path, etag, 10, Duration::from_secs(60))
+}
+
+fn upload_full(path: &str, etag: Option<&str>, size: u64, stable_for: Duration) -> Action {
     Action::Upload {
         local: p(path),
         remote: p(path),
+        local_id: ID,
         expected_etag: etag.map(e),
-        size: 10,
-        stable_for: Duration::from_secs(60),
+        size,
+        stable_for,
     }
 }
 
 fn upload_stable(path: &str, stable_for: Duration) -> Action {
-    Action::Upload {
-        local: p(path),
-        remote: p(path),
-        expected_etag: None,
-        size: 10,
+    upload_full(path, None, 10, stable_for)
+}
+
+fn conflict_copy(path: &str, stable_for: Duration) -> Action {
+    Action::UploadConflictCopy {
+        path: p(path),
+        local_id: ID,
+        size: 1,
         stable_for,
+    }
+}
+
+fn trash_local(path: &str) -> Action {
+    Action::TrashLocal {
+        path: p(path),
+        expected: version("h"),
+    }
+}
+
+fn move_local(from: &str, to: &str) -> Action {
+    Action::MoveLocal {
+        from: p(from),
+        to: p(to),
+        local_id: ID,
     }
 }
 
@@ -54,7 +90,7 @@ fn download(path: &str, overwrites_local: bool) -> Action {
         remote: p(path),
         local: p(path),
         size: 10,
-        overwrites_local,
+        replaces: overwrites_local.then(|| version("h")),
     }
 }
 
@@ -104,7 +140,7 @@ fn deferred(run: usize, reasons: Vec<DeferReason>) -> Outcome {
 
 fn mass_change(outcome: &Outcome) -> Option<(u64, u64)> {
     match outcome {
-        Outcome::Rejected(Rejection::MassChangeNeedsConfirmation(s)) => Some((s.count, s.total)),
+        Outcome::Rejected(Rejection::MassChangeNeedsConfirmation(s)) => Some((s.count(), s.total)),
         _ => None,
     }
 }
@@ -141,7 +177,7 @@ fn spec_example() {
         assert_eq!(run(plan, &c), expected, "{name}");
     }
 
-    // "delete 120 of 200": the summary carries a fingerprint, compared separately.
+    // "delete 120 of 200": the summary lists the files, compared separately.
     let o = run(delete(120), &context(200));
     assert_eq!(mass_change(&o), Some((120, 200)), "delete 120 of 200");
 }
@@ -184,7 +220,7 @@ fn surroundings() {
         ),
         (
             "server returned an empty listing",
-            vec![Action::TrashLocal { path: p("f0") }],
+            vec![trash_local("f0")],
             empty_listing(3),
             Outcome::Rejected(Rejection::SuspiciousRemoteListing),
         ),
@@ -253,10 +289,7 @@ fn conflicts() {
         ),
         (
             "conflict copy onto an occupied name",
-            vec![Action::UploadConflictCopy {
-                path: p("f0"),
-                size: 1,
-            }],
+            vec![conflict_copy("f0", Duration::from_secs(60))],
             conflict(&["f0"]),
         ),
         (
@@ -308,10 +341,7 @@ fn brake_thresholds() {
 #[test]
 fn brake_what_counts() {
     let moves: Vec<Action> = (0..100)
-        .map(|i| Action::MoveLocal {
-            from: p(&format!("f{i}")),
-            to: p(&format!("g{i}")),
-        })
+        .map(|i| move_local(&format!("f{i}"), &format!("g{i}")))
         .collect();
     let overwrites: Vec<Action> = (0..60)
         .map(|i| upload(&format!("f{i}"), Some("v1")))
@@ -319,11 +349,7 @@ fn brake_what_counts() {
     let new_files: Vec<Action> = (0..60).map(|i| upload(&format!("n{i}"), None)).collect();
     let download_over: Vec<Action> = (0..60).map(|i| download(&format!("f{i}"), true)).collect();
     let download_new: Vec<Action> = (0..60).map(|i| download(&format!("n{i}"), false)).collect();
-    let local_trash: Vec<Action> = (0..60)
-        .map(|i| Action::TrashLocal {
-            path: p(&format!("f{i}")),
-        })
-        .collect();
+    let local_trash: Vec<Action> = (0..60).map(|i| trash_local(&format!("f{i}"))).collect();
 
     let cases: Vec<(&str, Vec<Action>, bool)> = vec![
         ("moves do not count", moves, false),
@@ -340,22 +366,82 @@ fn brake_what_counts() {
 }
 
 #[test]
-fn brake_confirmation_only_for_the_same_plan() {
+fn brake_confirmation_covers_exactly_the_listed_files() {
     let c = context(200);
-    let Err(Rejection::MassChangeNeedsConfirmation(summary)) = assess(delete(120), &c) else {
+    let overwrite_all = |stable_secs: u64, size: u64| -> Vec<Action> {
+        (0..120)
+            .map(|i| {
+                upload_full(
+                    &format!("f{i}"),
+                    Some("v1"),
+                    size,
+                    Duration::from_secs(stable_secs),
+                )
+            })
+            .collect()
+    };
+    let Err(Rejection::MassChangeNeedsConfirmation(summary)) = assess(overwrite_all(60, 10), &c)
+    else {
         panic!("expected the brake");
     };
+    assert_eq!(summary.count(), 120);
+    assert_eq!(
+        summary.files.first(),
+        Some(&Destruction {
+            kind: DestructionKind::OverwriteRemote,
+            path: p("f0"),
+            version: "v1".into(),
+        }),
+        "the user sees which files and what happens to them"
+    );
 
     let mut confirmed = c.clone();
     confirmed.confirmation = Some(summary.confirm());
-    assert_eq!(
-        run(delete(120), &confirmed),
-        ok(120),
-        "same plan after confirmation"
-    );
+    let cases: Vec<(&str, Vec<Action>, bool)> = vec![
+        ("the same plan", overwrite_all(60, 10), false),
+        (
+            "after a rescan: the files are older and bigger, nothing else changed",
+            overwrite_all(120, 99),
+            false,
+        ),
+        ("only some of the confirmed files", delete(0), false),
+        (
+            "a file the user did not see",
+            {
+                let mut plan = overwrite_all(60, 10);
+                plan.push(trash("f150", "v1"));
+                plan
+            },
+            true,
+        ),
+        (
+            "another action on a confirmed file (trash instead of overwrite)",
+            {
+                let mut plan = overwrite_all(60, 10);
+                plan.push(trash("f0", "v1"));
+                plan
+            },
+            true,
+        ),
+    ];
+    for (name, plan, should_brake) in cases {
+        let o = run(plan, &confirmed);
+        assert_eq!(mass_change(&o).is_some(), should_brake, "{name}: {o:?}");
+    }
+
+    let mut changed_version = c.clone();
+    changed_version.confirmation = Some(summary.confirm());
+    for i in 0..120 {
+        changed_version
+            .remote_etags
+            .insert(p(&format!("f{i}")), e("v2"));
+    }
+    let plan: Vec<Action> = (0..120)
+        .map(|i| upload(&format!("f{i}"), Some("v2")))
+        .collect();
     assert!(
-        mass_change(&run(delete(121), &confirmed)).is_some(),
-        "a different plan does not inherit the confirmation"
+        mass_change(&run(plan, &changed_version)).is_some(),
+        "the files changed on the server since the user confirmed"
     );
 }
 
@@ -389,10 +475,7 @@ fn read_only_mode() {
             trash("f1", "v1"),
             Action::CreateRemoteFolder { path: p("s") },
             download("f2", true),
-            Action::MoveLocal {
-                from: p("f2"),
-                to: p("x"),
-            },
+            move_local("f2", "x"),
         ];
         assert_eq!(
             run(plan, &c),
@@ -432,7 +515,12 @@ fn settle_time() {
         assert_eq!(
             run(vec![upload_stable("a", stable_for)], &context(0)),
             expected,
-            "{name}"
+            "upload, {name}"
+        );
+        assert_eq!(
+            run(vec![conflict_copy("a", stable_for)], &context(0)),
+            expected,
+            "conflict copy, {name}"
         );
     }
 }
@@ -642,13 +730,7 @@ fn free_space() {
 fn huge_files_do_not_overflow() {
     let mut c = context(0);
     c.icloud_free = Some(u64::MAX - 1);
-    let huge = |path: &str| Action::Upload {
-        local: p(path),
-        remote: p(path),
-        expected_etag: None,
-        size: u64::MAX,
-        stable_for: Duration::from_secs(60),
-    };
+    let huge = |path: &str| upload_full(path, None, u64::MAX, Duration::from_secs(60));
     assert_eq!(
         run(vec![huge("a"), huge("b")], &c),
         Outcome::Rejected(Rejection::NotEnoughICloudSpace {

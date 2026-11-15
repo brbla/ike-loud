@@ -206,6 +206,7 @@ dependencies = [
  "fluent-bundle",
  "ikeloud-safety",
  "ikeloud-sync",
+ "ikeloud-testkit",
  "unic-langid",
 ]
 
@@ -219,6 +220,7 @@ version = "0.0.0"
 dependencies = [
  "ikeloud-safety",
  "ikeloud-sync",
+ "ikeloud-testkit",
  "rusqlite",
 ]
 
@@ -227,7 +229,16 @@ name = "ikeloud-sync"
 version = "0.0.0"
 dependencies = [
  "ikeloud-safety",
+ "ikeloud-testkit",
  "unicode-normalization",
+]
+
+[[package]]
+name = "ikeloud-testkit"
+version = "0.0.0"
+dependencies = [
+ "ikeloud-safety",
+ "ikeloud-sync",
 ]
 
 [[package]]

@@ -48,6 +48,8 @@ def check(members, policy):
         if len(who) > 1:
             errors.append(f"{dep}: only one wrapper may call it, allowed in {', '.join(sorted(who))}")
 
+    test_only = {name for name, rules in crates.items() if rules.get("test_only")}
+
     for pkg in sorted(members, key=lambda p: p["name"]):
         rules = crates.get(pkg["name"])
         if rules is None:
@@ -64,9 +66,11 @@ def check(members, policy):
                 allowed = internal
             else:
                 allowed = external
+            kind = dep["kind"] or "normal"
             if name not in allowed and dep["name"] not in allowed:
-                kind = dep["kind"] or "normal"
                 errors.append(f"{pkg['name']}: dependency not allowed {dep['name']} ({kind})")
+            elif dep["name"] in test_only and dep["kind"] != "dev":
+                errors.append(f"{pkg['name']}: {dep['name']} is test-only, but a {kind} dependency")
     return errors
 
 

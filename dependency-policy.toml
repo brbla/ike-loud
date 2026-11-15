@@ -9,6 +9,7 @@
 #
 # New dependency = a new line here with the reason in a comment.
 # `dev` applies to tests only and the single-wrapper rule does not apply to it.
+# A crate with `test_only = true` may only be a dev dependency.
 
 [crates.ikeloud-safety]
 internal = []
@@ -25,7 +26,7 @@ dev = []
 internal = ["ikeloud-safety"]
 # unicode-normalization: comparing names after NFC (spec, rules for names)
 external = ["unicode-normalization"]
-dev = []
+dev = ["ikeloud-testkit"]
 
 [crates.ikeloud-daemon]
 internal = ["ikeloud-api", "ikeloud-sync", "ikeloud-safety"]
@@ -48,10 +49,18 @@ dev = []
 internal = ["ikeloud-safety"]
 external = ["fluent-bundle", "unic-langid"]
 # ikeloud-sync only in the test of the planner with a translated copy name.
-dev = ["ikeloud-sync"]
+dev = ["ikeloud-sync", "ikeloud-testkit"]
 
 # Persistent state: single wrapper of rusqlite (SQLite bundled in a fixed version).
 [crates.ikeloud-state]
 internal = ["ikeloud-safety", "ikeloud-sync"]
 external = ["rusqlite"]
+dev = ["ikeloud-testkit"]
+
+# Builders of test data shared by the tests of several crates. `test_only`:
+# no crate may have it as a normal dependency.
+[crates.ikeloud-testkit]
+test_only = true
+internal = ["ikeloud-safety", "ikeloud-sync"]
+external = []
 dev = []
