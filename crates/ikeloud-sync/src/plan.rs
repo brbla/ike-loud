@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ikeloud_safety::{Action, RelPath, names as safety_names};
 
-use crate::names::{key, nfc};
+use crate::names::{key, nfc, same_place};
 use crate::state::{BaseEntry, DocId, LocalFile, RemoteFile, States};
 
 /// The side a collision is on.
@@ -60,14 +60,10 @@ pub struct Collision {
 /// Result of the planner.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Plan {
-    /// Actions in the order they should run.
+    /// Actions in the order they should run. The common state after the run
+    /// (including files that were deleted on both sides or moved the same way
+    /// on both) is computed by [`crate::base::next_base`].
     pub actions: Vec<Action>,
-    /// Common-state entries (by document ID) that no longer exist on either side.
-    pub forget: Vec<DocId>,
-    /// Files where both sides already agree but the common state is stale
-    /// (moved the same way on both sides, or a new inode after a save); only
-    /// the common state changes.
-    pub adopt: Vec<BaseEntry>,
     /// Name collisions the sync skipped.
     pub collisions: Vec<Collision>,
 }
@@ -152,7 +148,7 @@ impl<'a> Planner<'a> {
         let mut remote_by_doc: BTreeMap<&DocId, &RemoteFile> =
             remote.iter().map(|f| (&f.doc_id, *f)).collect();
 
-        let base_inodes: BTreeSet<u64> = states.base.iter().map(|b| b.inode).collect();
+        let base_inodes: BTreeSet<u64> = states.base.iter().filter_map(|b| b.inode).collect();
         let blocked: BTreeSet<String> = self
             .plan
             .collisions
@@ -179,21 +175,24 @@ impl<'a> Planner<'a> {
         base.sort_by_key(|b| key(b.path.as_str()));
         for b in base {
             if blocked.contains(&key(b.path.as_str()))
-                || blocked_inodes.contains(&b.inode)
+                || b.inode.is_some_and(|i| blocked_inodes.contains(&i))
                 || blocked_docs.contains(&b.doc_id)
             {
                 // A name collision: leave both sides of this file alone.
                 remote_by_doc.remove(&b.doc_id);
-                if let Some(l) = local_by_inode.remove(&b.inode) {
+                if let Some(l) = b.inode.and_then(|i| local_by_inode.remove(&i)) {
                     local_by_key.remove(&key(l.path.as_str()));
                 }
                 continue;
             }
-            let l = local_by_inode.get(&b.inode).copied().or_else(|| {
-                // Saved by "write a new file and rename it over": new inode, same path.
-                let candidate = local_by_key.get(&key(b.path.as_str())).copied()?;
-                (!base_inodes.contains(&candidate.inode)).then_some(candidate)
-            });
+            let l = b
+                .inode
+                .and_then(|i| local_by_inode.get(&i).copied())
+                .or_else(|| {
+                    // Saved by "write a new file and rename it over": new inode, same path.
+                    let candidate = local_by_key.get(&key(b.path.as_str())).copied()?;
+                    (!base_inodes.contains(&candidate.inode)).then_some(candidate)
+                });
             if let Some(l) = l {
                 local_by_inode.remove(&l.inode);
                 local_by_key.remove(&key(l.path.as_str()));
@@ -227,7 +226,8 @@ impl<'a> Planner<'a> {
         let remote_changed = r.is_none_or(|r| r.etag != b.etag);
 
         match (l, r) {
-            (None, None) => self.plan.forget.push(b.doc_id.clone()),
+            // Gone on both sides: nothing to do (next_base drops the entry).
+            (None, None) => {}
             (Some(l), None) if !local_changed => {
                 let path = self.path_of(l);
                 self.push(Action::TrashLocal { path });
@@ -276,20 +276,13 @@ impl<'a> Planner<'a> {
         }
     }
 
-    /// Content is in sync; only the path (or the inode) may differ.
+    /// Content is in sync; only the path may differ. (If both sides already
+    /// agree, next_base records it; no action is needed.)
     fn decide_path(&mut self, l: &LocalFile, r: &RemoteFile, b: &BaseEntry) {
         let local_path = self.path_of(l);
-        if local_path == r.path {
-            if local_path != b.path || l.inode != b.inode {
-                self.plan.adopt.push(BaseEntry {
-                    path: r.path.clone(),
-                    inode: l.inode,
-                    doc_id: r.doc_id.clone(),
-                    hash: l.hash.clone(),
-                    etag: r.etag.clone(),
-                });
-            }
-        } else if r.path != b.path {
+        if same_place(local_path.as_str(), r.path.as_str()) {
+            // Nothing to do.
+        } else if !same_place(r.path.as_str(), b.path.as_str()) {
             // Moved on iCloud (or on both sides): iCloud wins.
             self.move_locally(l, r.path.clone());
         } else {

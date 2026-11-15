@@ -11,7 +11,7 @@ use ikeloud_sync::{BaseEntry, ContentHash, DocId};
 fn entry(path: &str, inode: u64, doc: &str, hash: &str, etag: &str) -> BaseEntry {
     BaseEntry {
         path: RelPath::new(path),
-        inode,
+        inode: Some(inode),
         doc_id: DocId::new(doc),
         hash: ContentHash::new(hash),
         etag: Etag::new(etag),
@@ -304,4 +304,20 @@ fn unopenable_path_is_an_open_error() {
     let dir = TempDir::new("bad");
     let result = StateDb::open(&dir.0.join("missing-folder").join("state.db"));
     assert!(matches!(result, Err(StateError::Open(_))), "{result:?}");
+}
+
+#[test]
+fn entries_without_a_known_inode() {
+    // Several files may have lost their local identity at once.
+    let mut db = StateDb::open_in_memory().expect("open");
+    let mut a = entry("a", 1, "d1", "h", "e");
+    let mut b = entry("b", 2, "d2", "h", "e");
+    a.inode = None;
+    b.inode = None;
+    db.commit(
+        &[BaseChange::Set(a.clone()), BaseChange::Set(b.clone())],
+        &[],
+    )
+    .expect("commit");
+    assert_eq!(db.base().expect("read"), vec![a, b]);
 }

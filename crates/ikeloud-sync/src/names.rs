@@ -17,9 +17,35 @@ pub fn key(path: &str) -> String {
     nfc(&nfc(path).to_lowercase())
 }
 
+/// Are two paths the same place, as both sides see it? Equal after NFC: a
+/// name decomposed by a Mac and the same name composed by Linux are one
+/// place, while a different letter case is a different name (a rename that
+/// must be carried over).
+pub fn same_place(a: &str, b: &str) -> bool {
+    nfc(a) == nfc(b)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{key, nfc};
+    use super::{key, nfc, same_place};
+
+    #[test]
+    fn places() {
+        let cases: &[(&str, &str, &str, bool)] = &[
+            ("identical", "a/b.txt", "a/b.txt", true),
+            ("NFD and NFC", "Pr\u{30c}i\u{301}loha", "Příloha", true),
+            (
+                "letter case is a different name",
+                "Photo.jpg",
+                "photo.jpg",
+                false,
+            ),
+            ("another folder", "a/x", "b/x", false),
+        ];
+        for (name, a, b, expected) in cases {
+            assert_eq!(same_place(a, b), *expected, "{name}");
+        }
+    }
 
     #[test]
     fn normalization() {

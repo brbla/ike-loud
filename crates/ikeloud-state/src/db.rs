@@ -15,7 +15,7 @@ pub const SCHEMA_VERSION: i64 = 1;
 const SCHEMA_V1: &str = "
 CREATE TABLE base (
     doc_id TEXT PRIMARY KEY NOT NULL CHECK (doc_id <> ''),
-    inode  INTEGER NOT NULL UNIQUE,
+    inode  INTEGER UNIQUE,
     key    TEXT NOT NULL UNIQUE,
     path   TEXT NOT NULL CHECK (path <> ''),
     hash   TEXT NOT NULL CHECK (hash <> ''),
@@ -141,7 +141,7 @@ impl StateDb {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         e.doc_id.as_str(),
-                        inode_to_sql(e.inode),
+                        e.inode.map(inode_to_sql),
                         key(e.path.as_str()),
                         e.path.as_str(),
                         e.hash.as_str(),
@@ -211,7 +211,7 @@ impl StateDb {
 fn base_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BaseEntry> {
     Ok(BaseEntry {
         path: RelPath::new(r.get::<_, String>(0)?),
-        inode: inode_from_sql(r.get::<_, i64>(1)?),
+        inode: r.get::<_, Option<i64>>(1)?.map(inode_from_sql),
         doc_id: DocId::new(r.get::<_, String>(2)?),
         hash: ContentHash::new(r.get::<_, String>(3)?),
         etag: Etag::new(r.get::<_, String>(4)?),

@@ -43,7 +43,7 @@ fn remote(path: &str, doc: &str, etag: &str) -> RemoteFile {
 fn base(path: &str, inode: u64, doc: &str, hash: &str, etag: &str) -> BaseEntry {
     BaseEntry {
         path: p(path),
-        inode,
+        inode: Some(inode),
         doc_id: DocId::new(doc),
         hash: ContentHash::new(hash),
         etag: Etag::new(etag),
@@ -279,14 +279,12 @@ fn decision_table() {
 }
 
 #[test]
-fn deleted_on_both_is_forgotten() {
+fn deleted_on_both_needs_no_action() {
     let states = States {
         base: vec![base("a", 1, "d1", "h1", "e1")],
         ..States::default()
     };
-    let result = plan(&states);
-    assert_eq!(result.actions, vec![]);
-    assert_eq!(result.forget, vec![DocId::new("d1")]);
+    assert_eq!(plan(&states).actions, vec![]);
 }
 
 #[test]
@@ -306,21 +304,15 @@ fn modification_time_does_not_decide() {
 
 #[test]
 fn saving_with_a_new_inode_is_not_a_new_file() {
-    let cases: Vec<(&str, &str, Vec<Action>, Vec<BaseEntry>)> = vec![
+    let cases: Vec<(&str, &str, Vec<Action>)> = vec![
         (
             "new inode and new content: an ordinary upload",
             "h2",
             vec![upload("report.odt", Some("e1"))],
-            vec![],
         ),
-        (
-            "new inode, same content: only the common state learns the inode",
-            "h1",
-            vec![],
-            vec![base("report.odt", 77, "d1", "h1", "e1")],
-        ),
+        ("new inode, same content: nothing to do", "h1", vec![]),
     ];
-    for (name, hash, actions, adopt) in cases {
+    for (name, hash, actions) in cases {
         let states = States {
             local: vec![local("report.odt", 77, hash)],
             remote: vec![remote("report.odt", "d1", "e1")],
@@ -329,7 +321,6 @@ fn saving_with_a_new_inode_is_not_a_new_file() {
         };
         let result = plan(&states);
         assert_eq!(result.actions, actions, "{name}");
-        assert_eq!(result.adopt, adopt, "{name}");
     }
 }
 
@@ -361,54 +352,43 @@ fn a_known_inode_on_another_path_is_not_taken_for_a_resave() {
 
 #[test]
 fn moves() {
-    // (name, local path, remote path, expected actions, expected adopt path)
-    type Case = (
-        &'static str,
-        &'static str,
-        &'static str,
-        Vec<Action>,
-        Option<&'static str>,
-    );
+    // (name, local path, remote path, expected actions)
+    type Case = (&'static str, &'static str, &'static str, Vec<Action>);
     let cases: Vec<Case> = vec![
-        ("not moved", "a", "a", vec![], None),
+        ("not moved", "a", "a", vec![]),
         (
             "moved only on Linux",
             "dir/b",
             "a",
             vec![move_remote("a", "dir/b", "e1")],
-            None,
         ),
         (
             "moved only on iCloud",
             "a",
             "dir/b",
             vec![move_local("a", "dir/b")],
-            None,
         ),
         (
             "moved on both, differently: iCloud wins",
             "c",
             "b",
             vec![move_local("c", "b")],
-            None,
         ),
-        ("moved on both the same way", "b", "b", vec![], Some("b")),
+        ("moved on both the same way", "b", "b", vec![]),
         (
             "renamed locally to another letter case",
             "A",
             "a",
             vec![move_remote("a", "A", "e1")],
-            None,
         ),
         (
             "renamed on iCloud to another letter case",
             "a",
             "A",
             vec![move_local("a", "A")],
-            None,
         ),
     ];
-    for (name, l, r, expected, adopt) in cases {
+    for (name, l, r, expected) in cases {
         let states = States {
             local: vec![local(l, 1, "h1")],
             remote: vec![remote(r, "d1", "e1")],
@@ -417,14 +397,6 @@ fn moves() {
         };
         let result = plan(&states);
         assert_eq!(result.actions, expected, "{name}");
-        assert_eq!(
-            result.adopt,
-            adopt
-                .map(|a| base(a, 1, "d1", "h1", "e1"))
-                .into_iter()
-                .collect::<Vec<_>>(),
-            "{name}"
-        );
     }
 }
 

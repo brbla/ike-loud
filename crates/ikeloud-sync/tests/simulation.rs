@@ -26,10 +26,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use ikeloud_safety::{
-    Action, Context, Decision, Etag, LocalFolderState, Rejection, RelPath, assess,
+    Action, ApprovedAction, Context, Decision, Etag, LocalFolderState, Rejection, RelPath, assess,
 };
 use ikeloud_sync::names::key;
-use ikeloud_sync::{BaseEntry, ContentHash, DocId, LocalFile, RemoteFile, States, build_plan};
+use ikeloud_sync::{
+    BaseEntry, ContentHash, DocId, EffectError, Effects, LocalFile, RemoteFile, States, Transfer,
+    build_plan, execute, next_base,
+};
 
 // --- deterministic randomness ----------------------------------------------------------
 
@@ -89,9 +92,6 @@ struct World {
     next: u64,
     /// Does a rename on the server change the etag? (unknown, see 0010)
     etag_changes_on_rename: bool,
-    /// What the executor knows after a run: which local inode now holds the
-    /// content of which document (from downloads and uploads).
-    transfers: BTreeMap<u64, u64>,
     trace: Vec<String>,
 }
 
@@ -263,7 +263,6 @@ impl World {
             RelPath::new(format!("{} (conflict {n})", p.as_str()))
         });
 
-        self.transfers.clear();
         let mut context = Context::new(self.base.len() as u64);
         context.local_folder = LocalFolderState::Available {
             file_count: self.local.len() as u64,
@@ -291,15 +290,10 @@ impl World {
             }
             Err(other) => panic!("unexpected rejection {other:?}"),
         };
-        for action in approved {
-            let done = self.execute(action.action());
-            self.trace.push(format!(
-                "  {} {:?}",
-                if done { "did " } else { "skip" },
-                action.action()
-            ));
-        }
-        self.update_base();
+        // The product's executor and common-state update, not a test oracle.
+        let old_base = self.base.clone();
+        let report = execute(approved, self);
+        self.base = next_base(&old_base, &self.states(), &report.transfers);
         let show = |m: Vec<(String, u64)>| {
             m.into_iter()
                 .map(|(p, c)| format!("{p}={c}"))
@@ -323,9 +317,14 @@ impl World {
         true
     }
 
-    fn execute(&mut self, action: &Action) -> bool {
+    /// Carries out one action like the real effects must: check the
+    /// preconditions right before acting (server writes conditional on the
+    /// etag, local writes never overwrite unexpectedly), keep replaced
+    /// content in history, and report what each transfer produced.
+    fn perform(&mut self, action: &Action) -> Result<Option<Transfer>, EffectError> {
+        let changed = Err(EffectError::Changed);
         match action {
-            Action::CreateRemoteFolder { .. } => true,
+            Action::CreateRemoteFolder { .. } => Ok(None),
             Action::Upload {
                 local,
                 remote,
@@ -333,47 +332,34 @@ impl World {
                 ..
             } => {
                 let Some(l) = self.local.get(local.as_str()).cloned() else {
-                    return false;
+                    return changed;
                 };
-                let current = self.remote.get(remote.as_str());
-                match (expected_etag, current) {
+                let doc = match (expected_etag, self.remote.get(remote.as_str())) {
                     (Some(e), Some(r)) if e.as_str() == r.etag.to_string() => {
                         let (doc, old) = (r.doc, r.content);
                         self.kept.insert(old); // local history of the overwritten version
-                        self.transfers.insert(doc, l.inode);
-                        let etag = self.fresh();
-                        self.remote.insert(
-                            remote.as_str().into(),
-                            RFile {
-                                doc,
-                                etag,
-                                content: l.content,
-                            },
-                        );
-                        true
+                        doc
                     }
-                    (None, None) if self.remote_key_free(remote.as_str(), None) => {
-                        let (doc, etag) = (self.fresh(), self.fresh());
-                        self.transfers.insert(doc, l.inode);
-                        self.remote.insert(
-                            remote.as_str().into(),
-                            RFile {
-                                doc,
-                                etag,
-                                content: l.content,
-                            },
-                        );
-                        true
-                    }
-                    _ => false,
-                }
+                    (None, None) if self.remote_key_free(remote.as_str(), None) => self.fresh(),
+                    _ => return changed,
+                };
+                let etag = self.fresh();
+                self.remote.insert(
+                    remote.as_str().into(),
+                    RFile {
+                        doc,
+                        etag,
+                        content: l.content,
+                    },
+                );
+                Ok(Some(transfer(doc, etag, l.inode, l.content)))
             }
             Action::UploadConflictCopy { path, .. } => {
                 let Some(l) = self.local.get(path.as_str()).cloned() else {
-                    return false;
+                    return changed;
                 };
                 if !self.remote_key_free(path.as_str(), None) {
-                    return false;
+                    return changed;
                 }
                 let (doc, etag) = (self.fresh(), self.fresh());
                 self.remote.insert(
@@ -384,7 +370,7 @@ impl World {
                         content: l.content,
                     },
                 );
-                true
+                Ok(Some(transfer(doc, etag, l.inode, l.content)))
             }
             Action::TrashRemote {
                 path,
@@ -393,9 +379,9 @@ impl World {
                 Some(r) if r.etag.to_string() == expected_etag.as_str() => {
                     let r = self.remote.remove(path.as_str()).expect("exists");
                     self.kept.insert(r.content);
-                    true
+                    Ok(None)
                 }
-                _ => false,
+                _ => changed,
             },
             Action::MoveRemote {
                 from,
@@ -403,19 +389,19 @@ impl World {
                 expected_etag,
             } => {
                 let Some(r) = self.remote.get(from.as_str()) else {
-                    return false;
+                    return changed;
                 };
                 if r.etag.to_string() != expected_etag.as_str()
                     || !self.remote_key_free(to.as_str(), Some(r.doc))
                 {
-                    return false;
+                    return changed;
                 }
                 let mut r = self.remote.remove(from.as_str()).expect("exists");
                 if self.etag_changes_on_rename {
                     r.etag = self.fresh();
                 }
                 self.remote.insert(to.as_str().into(), r);
-                true
+                Ok(None)
             }
             Action::Download {
                 remote,
@@ -424,19 +410,18 @@ impl World {
                 ..
             } => {
                 let Some(r) = self.remote.get(remote.as_str()).cloned() else {
-                    return false;
+                    return changed;
                 };
-                let existing = self.local.get(local.as_str()).cloned();
-                match (overwrites_local, existing) {
+                match (overwrites_local, self.local.get(local.as_str())) {
                     (true, Some(old)) => {
-                        self.kept.insert(old.content); // local history
+                        let old = old.content;
+                        self.kept.insert(old); // local history
                     }
                     (false, None) => {}
-                    _ => return false,
+                    _ => return changed,
                 }
                 // Written to a temporary file and renamed: a new inode.
                 let inode = self.fresh();
-                self.transfers.insert(r.doc, inode);
                 self.local.insert(
                     local.as_str().into(),
                     LFile {
@@ -444,111 +429,24 @@ impl World {
                         content: r.content,
                     },
                 );
-                true
+                Ok(Some(transfer(r.doc, r.etag, inode, r.content)))
             }
             Action::TrashLocal { path } => match self.local.remove(path.as_str()) {
                 Some(l) => {
                     self.kept.insert(l.content);
-                    true
+                    Ok(None)
                 }
-                None => false,
+                None => changed,
             },
             Action::MoveLocal { from, to } => {
                 if !self.local.contains_key(from.as_str()) || self.local.contains_key(to.as_str()) {
-                    return false;
+                    return changed;
                 }
                 let l = self.local.remove(from.as_str()).expect("exists");
                 self.local.insert(to.as_str().into(), l);
-                true
+                Ok(None)
             }
         }
-    }
-
-    /// New common state after a run, following `NewBase` of the TLA+ model:
-    /// whatever matches on both sides is stored, component by component.
-    ///
-    /// 1. Exact matches (same path, same content) claim their inode and
-    ///    document first: new files, conflict copies, fully synced files.
-    /// 2. Every other known file (by document ID; locally by inode, or by its
-    ///    old path when the inode changed) keeps its entry, updated where
-    ///    the sides now agree: content and etag when the contents match, the
-    ///    path when the paths match.
-    /// 3. Entries whose file is gone on both sides are dropped.
-    ///
-    /// The real executor must do the same with what it knows: which etag a
-    /// transferred content got (uploads) or came from (downloads).
-    fn update_base(&mut self) {
-        let mut new: Vec<BaseEntry> = Vec::new();
-        let mut used_docs: BTreeSet<u64> = BTreeSet::new();
-        let mut used_inodes: BTreeSet<u64> = BTreeSet::new();
-        for (p, r) in &self.remote {
-            if let Some(l) = self.local.get(p)
-                && l.content == r.content
-            {
-                new.push(entry(p, l, r));
-                used_docs.insert(r.doc);
-                used_inodes.insert(l.inode);
-            }
-        }
-        let base_inodes: BTreeSet<u64> = self.base.iter().map(|b| b.inode).collect();
-        for b in &self.base {
-            let doc: u64 = b.doc_id.as_str().parse().expect("numeric doc id");
-            if used_docs.contains(&doc) {
-                continue;
-            }
-            let r = self.remote.iter().find(|(_, r)| r.doc == doc);
-            let transferred = self.transfers.get(&doc).copied();
-            let l = self
-                .local
-                .iter()
-                .find(|(_, l)| Some(l.inode) == transferred && !used_inodes.contains(&l.inode))
-                .or_else(|| {
-                    self.local
-                        .iter()
-                        .find(|(_, l)| l.inode == b.inode && !used_inodes.contains(&l.inode))
-                })
-                .or_else(|| {
-                    // Same rule as the planner: the old path by normalized name.
-                    self.local.iter().find(|(p, l)| {
-                        key(p) == key(b.path.as_str())
-                            && !base_inodes.contains(&l.inode)
-                            && !used_inodes.contains(&l.inode)
-                    })
-                });
-            let mut next = b.clone();
-            match (l, r) {
-                (None, None) => continue,
-                (Some((lp, l)), Some((rp, r))) => {
-                    next.inode = l.inode;
-                    if l.content == r.content {
-                        next.hash = ContentHash::new(l.content.to_string());
-                        next.etag = Etag::new(r.etag.to_string());
-                    }
-                    if lp == rp {
-                        next.path = RelPath::new(lp.as_str());
-                    }
-                    used_inodes.insert(l.inode);
-                }
-                (Some((_, l)), None) => {
-                    next.inode = l.inode;
-                    used_inodes.insert(l.inode);
-                }
-                (None, Some(_)) => {
-                    // The local file is gone; the entry must not keep an inode
-                    // that now belongs to another file.
-                    if used_inodes.contains(&next.inode) {
-                        next.inode = u64::MAX - doc;
-                    }
-                }
-            }
-            used_docs.insert(doc);
-            new.push(next);
-        }
-        // Names must stay unique: an entry whose path is now taken by an exact
-        // match keeps its identity but cannot keep the name.
-        let mut seen: BTreeSet<String> = BTreeSet::new();
-        new.retain(|b| seen.insert(key(b.path.as_str())));
-        self.base = new;
     }
 
     /// Names present on more than one local path (a collision sync skips).
@@ -565,13 +463,21 @@ impl World {
     }
 }
 
-fn entry(path: &str, l: &LFile, r: &RFile) -> BaseEntry {
-    BaseEntry {
-        path: RelPath::new(path),
-        inode: l.inode,
-        doc_id: DocId::new(r.doc.to_string()),
-        hash: ContentHash::new(l.content.to_string()),
-        etag: Etag::new(r.etag.to_string()),
+fn transfer(doc: u64, etag: u64, inode: u64, content: u64) -> Transfer {
+    Transfer {
+        doc_id: DocId::new(doc.to_string()),
+        etag: Etag::new(etag.to_string()),
+        inode,
+        hash: ContentHash::new(content.to_string()),
+    }
+}
+
+impl Effects for World {
+    fn apply(&mut self, action: ApprovedAction) -> Result<Option<Transfer>, EffectError> {
+        let result = self.perform(action.action());
+        let verb = if result.is_ok() { "did " } else { "skip" };
+        self.trace.push(format!("  {verb} {:?}", action.action()));
+        result
     }
 }
 
@@ -652,17 +558,17 @@ fn simulate(world: &mut World, rng: &mut Rng) -> Result<Outcome, String> {
                 .remote
                 .iter()
                 .find(|(_, r)| r.doc.to_string() == b.doc_id.as_str());
-            let touches = skipped_inodes.contains(&b.inode)
+            let touches = b.inode.is_some_and(|i| skipped_inodes.contains(&i))
                 || skipped.contains(&key(b.path.as_str()))
                 || remote.is_some_and(|(p, _)| skipped.contains(&key(p)));
             if touches {
                 skipped.insert(key(b.path.as_str()));
-                skipped_inodes.insert(b.inode);
+                skipped_inodes.extend(b.inode);
                 if let Some((p, _)) = remote {
                     skipped.insert(key(p));
                 }
                 for (p, l) in &world.local {
-                    if l.inode == b.inode {
+                    if Some(l.inode) == b.inode {
                         skipped.insert(key(p));
                     }
                 }

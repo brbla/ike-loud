@@ -75,8 +75,9 @@ pub struct RemoteFile {
 pub struct BaseEntry {
     /// Relative path that was the same on both sides.
     pub path: RelPath,
-    /// Inode of the local file.
-    pub inode: u64,
+    /// Inode of the local file; `None` when the local file is gone or its
+    /// identity is no longer known (its inode now belongs to another file).
+    pub inode: Option<u64>,
     /// Document ID on the server.
     pub doc_id: DocId,
     /// Content hash that was on both sides.

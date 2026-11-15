@@ -434,7 +434,7 @@ fn planner_with_a_translated_copy_name() {
         }],
         base: vec![BaseEntry {
             path: RelPath::new("zprava.odt"),
-            inode: 1,
+            inode: Some(1),
             doc_id: DocId::new("d1"),
             hash: ContentHash::new("h1"),
             etag: Etag::new("e1"),
