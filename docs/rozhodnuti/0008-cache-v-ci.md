@@ -22,6 +22,12 @@ Náš vlastní kód se testuje vždy v aktuální podobě.
   cache s jiným obsahem.
 - **Výsledky se necachují.** Testy, clippy, TLC, `cargo deny`, `cargo audit`
   a `cargo vet` běží pokaždé. Databáze zranitelností se stahuje pokaždé.
+- **Pevný čas změny souborů ve `vendor/`.** Cargo u závislostí s build
+  skriptem pozná změnu podle času změny souborů a čerstvý `checkout` má
+  všechny soubory nové. Bez toho se i při zásahu cache znovu překládalo
+  21 závislostí (ověřeno lokálně i v CI). Obsah `vendor/` hlídá klíč cache,
+  takže pevný čas je tam bezpečný; naše zdrojové soubory si skutečné časy
+  nechávají.
 - Nástroje z cache CI ověří: jejich verze musí odpovídat připnutým.
 - `CARGO_INCREMENTAL=0`: v CI se nepoužívá inkrementální překlad.
 - Akce GitHubu jsou připnuté na commit (`actions/checkout` v7.0.1,

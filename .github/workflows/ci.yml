@@ -39,12 +39,19 @@ jobs:
           rustup toolchain install
           echo "rustc=$(rustc -V | tr ' ' '_')" >> "$GITHUB_OUTPUT"
 
+      # Cargo decides whether a dependency with a build script changed by file
+      # mtimes, and a fresh checkout makes every file new. vendor/ content is
+      # covered by the cache key (all .cargo-checksum.json files), so a fixed
+      # mtime is safe there. Our own sources keep their real mtimes.
+      - name: Fixed mtime for vendored sources
+        run: find vendor -exec touch -h -d '2000-01-01T00:00:00Z' {} +
+
       - name: Restore compiled dependencies
         id: deps
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target
-          key: deps-v1-${{ runner.os }}-${{ steps.toolchain.outputs.rustc }}-${{ env.RUSTFLAGS }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.cargo/config.toml', 'rust-toolchain.toml', 'vendor/**/.cargo-checksum.json') }}
+          key: deps-v2-${{ runner.os }}-${{ steps.toolchain.outputs.rustc }}-${{ env.RUSTFLAGS }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.cargo/config.toml', 'rust-toolchain.toml', 'vendor/**/.cargo-checksum.json') }}
 
       - name: Drop our own crates from the cache
         run: scripts/ci-clean-workspace.sh
