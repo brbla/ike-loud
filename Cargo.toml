@@ -10,6 +10,8 @@ members = [
     "crates/ikeloud-i18n",
     "crates/ikeloud-state",
     "crates/ikeloud-testkit",
+    "crates/ikeloud-hash",
+    "crates/ikeloud-local",
 ]
 
 [workspace.package]

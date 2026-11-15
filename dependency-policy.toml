@@ -17,9 +17,9 @@ external = []
 dev = []
 
 [crates.ikeloud-api]
-internal = ["ikeloud-safety"]
-# SRP-6a: big numbers, SHA-256, PBKDF2 and the random client secret (src/srp.rs)
-external = ["num-bigint", "sha2", "pbkdf2", "getrandom"]
+internal = ["ikeloud-safety", "ikeloud-hash"]
+# SRP-6a: big numbers and the random client secret (src/srp.rs)
+external = ["num-bigint", "getrandom"]
 dev = []
 
 [crates.ikeloud-sync]
@@ -56,6 +56,20 @@ dev = ["ikeloud-sync", "ikeloud-testkit"]
 internal = ["ikeloud-safety", "ikeloud-sync"]
 external = ["rusqlite"]
 dev = ["ikeloud-testkit"]
+
+# Hash functions: single wrapper of sha2 and pbkdf2, used by the sign-in
+# (ikeloud-api) and the local scanner (content hashes).
+[crates.ikeloud-hash]
+internal = []
+external = ["sha2", "pbkdf2"]
+dev = []
+
+# The local side: scanning the synced folder. Standard library only; content
+# hashes through ikeloud-hash.
+[crates.ikeloud-local]
+internal = ["ikeloud-safety", "ikeloud-sync", "ikeloud-hash"]
+external = []
+dev = []
 
 # Builders of test data shared by the tests of several crates. `test_only`:
 # no crate may have it as a normal dependency.

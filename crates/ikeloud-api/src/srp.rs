@@ -15,10 +15,10 @@
 //! the server wants is found by an experiment in milestone 0; hence
 //! [`Padding`].
 //!
-//! Single wrapper of `num-bigint`, `sha2`, `pbkdf2` and `getrandom`.
+//! Single wrapper of `num-bigint` and `getrandom`; hashes come from
+//! `ikeloud-hash`.
 
 use num_bigint::BigUint;
-use sha2::{Digest, Sha256};
 
 /// Length of group numbers in bytes (2048 bits).
 const GROUP_LEN: usize = 256;
@@ -127,11 +127,9 @@ pub fn derive_password(
     let hash = h(&[password.as_bytes()]);
     let input: Vec<u8> = match protocol {
         Protocol::S2k => hash.to_vec(),
-        Protocol::S2kFo => hex(&hash).into_bytes(),
+        Protocol::S2kFo => ikeloud_hash::hex(&hash).into_bytes(),
     };
-    let mut output = [0u8; 32];
-    pbkdf2::pbkdf2_hmac::<Sha256>(&input, salt, iterations, &mut output);
-    Ok(output)
+    Ok(ikeloud_hash::pbkdf2_sha256(&input, salt, iterations))
 }
 
 /// SRP client for one sign-in.
@@ -244,11 +242,7 @@ fn n() -> BigUint {
 }
 
 fn h(parts: &[&[u8]]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    for part in parts {
-        hasher.update(part);
-    }
-    hasher.finalize().into()
+    ikeloud_hash::sha256(parts)
 }
 
 fn number(bytes: &[u8]) -> BigUint {
@@ -261,16 +255,6 @@ fn pad(value: &BigUint) -> Vec<u8> {
     let mut output = vec![0u8; GROUP_LEN.saturating_sub(bytes.len())];
     output.extend_from_slice(&bytes);
     output
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
-            let _ = write!(s, "{b:02x}");
-            s
-        })
 }
 
 #[cfg(test)]

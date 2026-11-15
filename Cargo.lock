@@ -182,9 +182,8 @@ name = "ikeloud-api"
 version = "0.0.0"
 dependencies = [
  "getrandom",
+ "ikeloud-hash",
  "num-bigint",
- "pbkdf2",
- "sha2",
 ]
 
 [[package]]
@@ -200,6 +199,14 @@ name = "ikeloud-gui"
 version = "0.0.0"
 
 [[package]]
+name = "ikeloud-hash"
+version = "0.0.0"
+dependencies = [
+ "pbkdf2",
+ "sha2",
+]
+
+[[package]]
 name = "ikeloud-i18n"
 version = "0.0.0"
 dependencies = [
@@ -208,6 +215,15 @@ dependencies = [
  "ikeloud-sync",
  "ikeloud-testkit",
  "unic-langid",
+]
+
+[[package]]
+name = "ikeloud-local"
+version = "0.0.0"
+dependencies = [
+ "ikeloud-hash",
+ "ikeloud-safety",
+ "ikeloud-sync",
 ]
 
 [[package]]

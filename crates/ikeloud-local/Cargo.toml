@@ -1,0 +1,16 @@
+[package]
+name = "ikeloud-local"
+description = "The local side of ike loud: scanning the synced folder (identity, content hash, stability)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ikeloud-safety = { path = "../ikeloud-safety" }
+ikeloud-sync = { path = "../ikeloud-sync" }
+ikeloud-hash = { path = "../ikeloud-hash" }
