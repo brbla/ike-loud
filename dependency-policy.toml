@@ -49,3 +49,9 @@ internal = ["ikeloud-safety"]
 external = ["fluent-bundle", "unic-langid"]
 # ikeloud-sync only in the test of the planner with a translated copy name.
 dev = ["ikeloud-sync"]
+
+# Persistent state: single wrapper of rusqlite (SQLite bundled in a fixed version).
+[crates.ikeloud-state]
+internal = ["ikeloud-safety", "ikeloud-sync"]
+external = ["rusqlite"]
+dev = []

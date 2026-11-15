@@ -8,6 +8,7 @@ members = [
     "crates/ikeloud-gui",
     "crates/ikeloud-cli",
     "crates/ikeloud-i18n",
+    "crates/ikeloud-state",
 ]
 
 [workspace.package]

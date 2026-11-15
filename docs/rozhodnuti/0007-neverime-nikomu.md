@@ -22,7 +22,8 @@ Prověřit všech 48 knihoven je podle `cargo vet suggest` přes 200 000 řádk�
 kódu, většinu tvoří `libc`, `syn` a `num-bigint`. Pořadí auditů:
 
 1. knihovny na cestě k heslu a k datům: `sha2`, `pbkdf2`, `hmac`,
-   `num-bigint`, `getrandom`, `unicode-normalization`;
+   `num-bigint`, `getrandom`, `unicode-normalization`, `libsqlite3-sys`
+   (přibalený zdrojový kód SQLite);
 2. knihovny, které běží při sestavení (procedurální makra: `syn`,
    `quote`, `proc-macro2`, `displaydoc`, `thiserror-impl`, `serde_derive`);
 3. ostatní.

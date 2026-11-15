@@ -16,6 +16,11 @@ impl ContentHash {
     pub fn new(hash: impl Into<String>) -> Self {
         Self(hash.into())
     }
+
+    /// The hash as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// A file in the local folder at the last scan.
