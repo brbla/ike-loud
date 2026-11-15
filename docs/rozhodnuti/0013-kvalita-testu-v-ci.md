@@ -93,5 +93,5 @@ patří do démona: proces bez core dumpů (`PR_SET_DUMPABLE`), milník 1.
 - **`cargo vet` má 60 výjimek a žádný audit.** Projde, ale nic tím
   neověřuje. Audity musí udělat člověk; seznam výjimek je dluh, který se
   bude splácet od nejmenších crate.
-- **TLA+ modely** nepokrývají NFC, uložení novým souborem, identitu
-  s časem vzniku ani brzdu. Tyto věci zatím pokrývá jen simulace.
+- **TLA+ modely** nepokrývají NFC ani brzdu. Identitu souboru s recyklací
+  inodů pokrývá model z 0014.

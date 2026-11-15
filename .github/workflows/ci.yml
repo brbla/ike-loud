@@ -117,6 +117,21 @@ jobs:
       - name: TLA+ model of moves
         run: scripts/tlc.sh SyncMoves.cfg
 
+      - name: TLA+ model of file identity (with and without birth times)
+        run: |
+          scripts/tlc.sh SyncIdentity.cfg
+          scripts/tlc.sh SyncIdentityNoBirth.cfg
+
+      # The model must still find the bug the independent review found
+      # (pairing by inode alone); otherwise it no longer checks anything.
+      - name: The identity model catches the reviewed bug
+        run: |
+          if scripts/tlc.sh SyncIdentityInodeOnly.cfg > tlc-bug.log 2>&1; then
+            echo "error: the model no longer finds pairing by inode alone" >&2
+            exit 1
+          fi
+          grep -q "Invariant NoForeignPairing is violated" tlc-bug.log
+
   supply-chain:
     runs-on: ubuntu-24.04
     env:
