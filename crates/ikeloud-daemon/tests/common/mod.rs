@@ -66,6 +66,11 @@ impl FakeICloud {
         self.trash.push((path.into(), f.content));
     }
 
+    /// Is the name free (letter case and normalization ignored)?
+    pub fn name_free(&self, path: &str) -> bool {
+        self.holder(path).is_none()
+    }
+
     pub fn content(&self, path: &str) -> Option<&[u8]> {
         self.files.get(path).map(|f| f.content.as_slice())
     }
@@ -241,7 +246,7 @@ pub struct Fixture {
     pub icloud: FakeICloud,
 }
 
-fn copy_name(path: &RelPath, n: u32) -> Option<RelPath> {
+pub fn copy_name(path: &RelPath, n: u32) -> Option<RelPath> {
     path.sibling(&format!("{} (conflict {n})", path.name()))
 }
 

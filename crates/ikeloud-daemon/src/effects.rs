@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ikeloud_hash::HashingReader;
 use ikeloud_local::{DiskError, LocalDisk};
 use ikeloud_safety::{Action, ApprovedAction, ContentHash, LocalId, RelPath};
-use ikeloud_state::{JournalEntry, JournalKind};
+use ikeloud_state::{JournalEntry, JournalKind, StateDb};
 use ikeloud_sync::{EffectError, Effects, StopReason, Transfer};
 
 use crate::remote::{Remote, RemoteError};
@@ -14,8 +14,11 @@ use crate::remote::{Remote, RemoteError};
 pub(crate) struct RunEffects<'a> {
     pub(crate) disk: &'a LocalDisk,
     pub(crate) remote: &'a mut dyn Remote,
+    pub(crate) db: &'a mut StateDb,
     pub(crate) now: SystemTime,
-    pub(crate) journal: Vec<JournalEntry>,
+    /// An action could not be recorded: no further action is carried out,
+    /// so nothing more happens that the state does not know.
+    pub(crate) record_failed: bool,
 }
 
 impl From<RemoteError> for EffectError {
@@ -41,6 +44,7 @@ impl RunEffects<'_> {
         &mut self,
         action: ApprovedAction,
         path: &RelPath,
+        remote_path: RelPath,
         id: LocalId,
     ) -> Result<Option<Transfer>, EffectError> {
         let file = self.disk.open(path, id).map_err(disk_error)?;
@@ -50,6 +54,7 @@ impl RunEffects<'_> {
             .write(action, Some(&mut reader))?
             .ok_or(EffectError::Stop(StopReason::UnknownResponse))?;
         Ok(Some(Transfer {
+            path: remote_path,
             doc_id: written.doc_id,
             etag: written.etag,
             local: id,
@@ -60,10 +65,13 @@ impl RunEffects<'_> {
     fn perform(&mut self, approved: ApprovedAction) -> Result<Option<Transfer>, EffectError> {
         match approved.action().clone() {
             Action::Upload {
-                local, local_id, ..
-            } => self.upload(approved, &local, local_id),
+                local,
+                remote,
+                local_id,
+                ..
+            } => self.upload(approved, &local, remote, local_id),
             Action::UploadConflictCopy { path, local_id, .. } => {
-                self.upload(approved, &path, local_id)
+                self.upload(approved, &path, path.clone(), local_id)
             }
             Action::CreateRemoteFolder { .. }
             | Action::TrashRemote { .. }
@@ -83,6 +91,7 @@ impl RunEffects<'_> {
                     .write(&local, &mut download.content, replaces.as_ref(), self.now)
                     .map_err(disk_error)?;
                 Ok(Some(Transfer {
+                    path: remote,
                     doc_id: download.doc_id,
                     etag: download.etag,
                     local: id,
@@ -107,11 +116,17 @@ impl RunEffects<'_> {
 
 impl Effects for RunEffects<'_> {
     fn apply(&mut self, approved: ApprovedAction) -> Result<Option<Transfer>, EffectError> {
+        if self.record_failed {
+            return Err(EffectError::Stop(StopReason::LocalDisk));
+        }
         let action = approved.action().clone();
         let result = self.perform(approved);
-        if result.is_ok() {
-            self.journal
-                .push(journal_entry(&action, unix_secs(self.now)));
+        if let Ok(transfer) = &result {
+            // Recorded at once: a crash from here on forgets nothing.
+            let entry = journal_entry(&action, unix_secs(self.now));
+            if self.db.record(&entry, transfer.as_ref()).is_err() {
+                self.record_failed = true;
+            }
         }
         result
     }

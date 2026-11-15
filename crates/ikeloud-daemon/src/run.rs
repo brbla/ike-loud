@@ -47,8 +47,9 @@ pub struct RunReport {
     pub skipped: Vec<Skipped>,
     /// Whether the new common state was stored. Not when the folder could
     /// not be read again after the run: the old common state is safe, a
-    /// common state from a partial scan is not. (A server that cannot be
-    /// listed after the run is predicted from what the run did.)
+    /// common state from a partial scan is not; the recorded transfers wait
+    /// for the next run. (A server that cannot be listed after the run is
+    /// predicted from what the run did.)
     pub committed: bool,
 }
 
@@ -63,11 +64,12 @@ pub struct SyncSetup<'a> {
     pub conflict_name: &'a dyn Fn(&RelPath, u32) -> Option<RelPath>,
 }
 
-/// Runs one sync against `remote`.
+/// Runs one sync against `remote`: [`start_run`], then
+/// [`ExecutedRun::finish`].
 ///
 /// `confirmation` is the user's answer to an earlier
 /// [`Rejection::MassChangeNeedsConfirmation`]. Errors are errors of the state
-/// database only: nothing was committed.
+/// database only.
 pub fn sync_once(
     setup: &SyncSetup<'_>,
     remote: &mut dyn Remote,
@@ -75,26 +77,74 @@ pub fn sync_once(
     confirmation: Option<MassChangeConfirmation>,
     now: SystemTime,
 ) -> Result<RunOutcome, StateError> {
+    match start_run(setup, remote, db, confirmation, now)? {
+        Started::Executed(run) => run.finish(setup, remote, db),
+        Started::Ended(outcome) => Ok(outcome),
+    }
+}
+
+/// The first part of a run: scan, list, plan, assess, carry out. Every
+/// carried-out action is recorded at once ([`StateDb::record`]): a crash
+/// after this part forgets nothing an action proved.
+pub enum Started {
+    /// Actions were carried out; [`ExecutedRun::finish`] stores the new
+    /// common state.
+    Executed(ExecutedRun),
+    /// The run ended before carrying out anything.
+    Ended(RunOutcome),
+}
+
+/// A run whose actions are done and recorded, but whose new common state is
+/// not stored yet.
+#[derive(Debug)]
+pub struct ExecutedRun {
+    base: Vec<BaseEntry>,
+    remote_before: Vec<RemoteFile>,
+    executed: Report,
+    deferred: Vec<DeferredAction>,
+    collisions: Vec<Collision>,
+    busy: Vec<RelPath>,
+    skipped: Vec<Skipped>,
+    now: SystemTime,
+}
+
+/// The first part of a run, see [`Started`].
+pub fn start_run(
+    setup: &SyncSetup<'_>,
+    remote: &mut dyn Remote,
+    db: &mut StateDb,
+    confirmation: Option<MassChangeConfirmation>,
+    now: SystemTime,
+) -> Result<Started, StateError> {
     let (disk, settle_time) = (&setup.disk, setup.settle_time);
-    let root = disk.root();
-    let local = match scan(root, now) {
+    let local = match scan(disk.root(), now) {
         Ok(s) => s,
         Err(ScanError::Missing | ScanError::NotADirectory) => {
-            return Ok(RunOutcome::Rejected(Rejection::LocalFolderUnavailable));
+            return Ok(Started::Ended(RunOutcome::Rejected(
+                Rejection::LocalFolderUnavailable,
+            )));
         }
-        Err(e) => return Ok(RunOutcome::ScanFailed(e)),
+        Err(e) => return Ok(Started::Ended(RunOutcome::ScanFailed(e))),
     };
     let listing = match remote.list() {
         Ok(l) => l,
-        Err(reason) => return Ok(RunOutcome::RemoteUnavailable(reason)),
+        Err(reason) => return Ok(Started::Ended(RunOutcome::RemoteUnavailable(reason))),
     };
-    let base = db.base()?;
-    let states = States {
+    let mut states = States {
         local: local.files,
         remote: listing.files,
         remote_folders: listing.folders,
-        base,
+        base: db.base()?,
     };
+    // Transfers recorded by a run that crashed before storing its common
+    // state: they go into the common state first, or the plan would take
+    // the files they synced for new files on both sides.
+    let pending = db.pending()?;
+    if !pending.is_empty() {
+        let recovered = next_base(&states.base, &states, &pending);
+        db.commit(&changes(&states.base, &recovered), &[])?;
+        states.base = recovered;
+    }
     let plan = build_plan(&states, settle_time, setup.conflict_name);
 
     let mut context = Context::new(count(states.base.len()), key);
@@ -115,72 +165,95 @@ pub fn sync_once(
     let (approved, deferred) = match assess(plan.actions, &context) {
         Ok(Decision::NothingToDo) => (vec![], vec![]),
         Ok(Decision::Approved(p)) => (p.actions, p.deferred),
-        Err(rejection) => return Ok(RunOutcome::Rejected(rejection)),
+        Err(rejection) => return Ok(Started::Ended(RunOutcome::Rejected(rejection))),
     };
+    if confirmed && let Some(first) = approved.first() {
+        // The brake window starts again from here.
+        db.record(
+            &JournalEntry {
+                time: unix_secs(now),
+                kind: JournalKind::MassChangeConfirmed,
+                path: first.action().path().clone(),
+                target: None,
+            },
+            None,
+        )?;
+    }
 
     let mut effects = RunEffects {
         disk,
         remote,
+        db,
         now,
-        journal: vec![],
+        record_failed: false,
     };
     let executed = execute(approved, &mut effects);
-    let mut journal = effects.journal;
-    if confirmed && let Some(first) = journal.first() {
-        journal.insert(
-            0,
-            JournalEntry {
-                time: first.time,
-                kind: JournalKind::MassChangeConfirmed,
-                path: first.path.clone(),
-                target: None,
-            },
-        );
-    }
-
-    // The new common state from a fresh look at both sides. If the server
-    // cannot be listed now (it went offline during the run), its last
-    // listing with what this run did to it stands in: what the transfers
-    // prove must not be forgotten, or the next run would take every file
-    // uploaded before the outage for a new file on both sides and make
-    // conflict copies of them. Should the prediction be off, the next real
-    // listing shows a change on iCloud, which is handled like any other.
-    let after_remote = remote
-        .list()
-        .map(|r| r.files)
-        .unwrap_or_else(|_| predicted_remote(&states.remote, &executed));
-    let committed = match scan(root, now) {
-        Ok(l) => {
-            let after = States {
-                local: l.files,
-                remote: after_remote,
-                remote_folders: vec![],
-                base: vec![],
-            };
-            let new_base = next_base(&states.base, &after, &executed.transfers);
-            db.commit(&changes(&states.base, &new_base), &journal)?;
-            true
-        }
-        // The folder cannot be read again: only the journal is stored. The
-        // old common state stays and the next run plans from it.
-        Err(_) => {
-            db.commit(&[], &journal)?;
-            false
-        }
-    };
-    Ok(RunOutcome::Ran(RunReport {
+    Ok(Started::Executed(ExecutedRun {
+        base: states.base,
+        remote_before: states.remote,
         executed,
         deferred,
         collisions: plan.collisions,
         busy: plan.busy,
         skipped: local.skipped,
-        committed,
+        now,
     }))
 }
 
+impl ExecutedRun {
+    /// The second part of a run: the new common state from a fresh look at
+    /// both sides and every transfer recorded since the last commit (also of
+    /// an earlier run that crashed before this point), stored in one
+    /// transaction.
+    pub fn finish(
+        self,
+        setup: &SyncSetup<'_>,
+        remote: &mut dyn Remote,
+        db: &mut StateDb,
+    ) -> Result<RunOutcome, StateError> {
+        // If the server cannot be listed now (it went offline during the
+        // run), its last listing with what this run did to it stands in:
+        // what the transfers prove must not be forgotten, or the next run
+        // would take every file uploaded before the outage for a new file
+        // on both sides and make conflict copies of them. Should the
+        // prediction be off, the next real listing shows a change on
+        // iCloud, which is handled like any other.
+        let after_remote = remote
+            .list()
+            .map(|r| r.files)
+            .unwrap_or_else(|_| predicted_remote(&self.remote_before, &self.executed));
+        let committed = match scan(setup.disk.root(), self.now) {
+            Ok(l) => {
+                let after = States {
+                    local: l.files,
+                    remote: after_remote,
+                    remote_folders: vec![],
+                    base: vec![],
+                };
+                let transfers = db.pending()?;
+                let new_base = next_base(&self.base, &after, &transfers);
+                db.commit(&changes(&self.base, &new_base), &[])?;
+                true
+            }
+            // The folder cannot be read again: the old common state stays
+            // and the recorded transfers wait for the next run.
+            Err(_) => false,
+        };
+        Ok(RunOutcome::Ran(RunReport {
+            executed: self.executed,
+            deferred: self.deferred,
+            collisions: self.collisions,
+            busy: self.busy,
+            skipped: self.skipped,
+            committed,
+        }))
+    }
+}
+
 /// The server as it must be after the actions this run did: the listing
-/// from before, with each done server action applied. Transfers come in the
-/// order of the done actions that make them (uploads and downloads).
+/// from before, with each done server action applied and every version a
+/// transfer saw. Transfers come in the order of the done actions that make
+/// them (uploads and downloads).
 fn predicted_remote(before: &[RemoteFile], report: &Report) -> Vec<RemoteFile> {
     let mut files = before.to_vec();
     let mut transfers = report.transfers.iter();
@@ -207,8 +280,14 @@ fn predicted_remote(before: &[RemoteFile], report: &Report) -> Vec<RemoteFile> {
                     });
                 }
             }
+            // A download read the document at the version it reports (the
+            // user may have changed it since the listing).
             Action::Download { .. } => {
-                transfers.next();
+                if let Some(t) = transfers.next() {
+                    for f in files.iter_mut().filter(|f| f.doc_id == t.doc_id) {
+                        f.etag = t.etag.clone();
+                    }
+                }
             }
             Action::TrashRemote { path, .. } => files.retain(|f| &f.path != path),
             Action::MoveRemote { from, to, .. } => {

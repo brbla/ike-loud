@@ -32,7 +32,7 @@ fn next_common_state() {
             old: vec![base("a", Some(1), "d1", "h1", "e1")],
             local: vec![local("a", 1, "h2")],
             remote: vec![remote("a", "d1", "e2")],
-            transfers: vec![transfer("d1", "e2", 1, "h2")],
+            transfers: vec![transfer("a", "d1", "e2", 1, "h2")],
             expected: vec![base("a", Some(1), "d1", "h2", "e2")],
         },
         Case {
@@ -40,7 +40,7 @@ fn next_common_state() {
             old: vec![],
             local: vec![local("n", 5, "h5")],
             remote: vec![remote("n", "d5", "e5")],
-            transfers: vec![transfer("d5", "e5", 5, "h5")],
+            transfers: vec![transfer("n", "d5", "e5", 5, "h5")],
             expected: vec![base("n", Some(5), "d5", "h5", "e5")],
         },
         Case {
@@ -48,7 +48,7 @@ fn next_common_state() {
             old: vec![],
             local: vec![local(nfd, 5, "h5")],
             remote: vec![remote("Příloha", "d5", "e5")],
-            transfers: vec![transfer("d5", "e5", 5, "h5")],
+            transfers: vec![transfer("Příloha", "d5", "e5", 5, "h5")],
             // The local name stays as it is on disk (NFD).
             expected: vec![BaseEntry {
                 local_path: ikeloud_testkit::p(nfd),
@@ -60,7 +60,10 @@ fn next_common_state() {
             old: vec![base("a", Some(1), "d1", "h1", "e1")],
             local: vec![local("mine", 9, "h2"), local("a (copy)", 1, "hx")],
             remote: vec![remote("moved", "d1", "e2"), remote("a (copy)", "d7", "e7")],
-            transfers: vec![transfer("d7", "e7", 1, "hx"), transfer("d1", "e2", 9, "h2")],
+            transfers: vec![
+                transfer("a (copy)", "d7", "e7", 1, "hx"),
+                transfer("moved", "d1", "e2", 9, "h2"),
+            ],
             expected: vec![
                 base("a (copy)", Some(1), "d7", "hx", "e7"),
                 base("mine", Some(9), "d1", "h2", "e2"),
@@ -71,7 +74,7 @@ fn next_common_state() {
             old: vec![base("a", Some(1), "d1", "h1", "e1")],
             local: vec![local("mine", 1, "h2")],
             remote: vec![remote("a", "d1", "e2")],
-            transfers: vec![transfer("d1", "e2", 1, "h2")],
+            transfers: vec![transfer("a", "d1", "e2", 1, "h2")],
             expected: vec![BaseEntry {
                 local_path: ikeloud_testkit::p("mine"),
                 ..base("a", Some(1), "d1", "h2", "e2")
@@ -83,8 +86,8 @@ fn next_common_state() {
             local: vec![local("Příloha", 10, "h9"), local("b", 12, "h6")],
             remote: vec![remote("c", "d1", "e9"), remote("b", "d6", "e6")],
             transfers: vec![
-                transfer("d1", "e9", 10, "h9"),
-                transfer("d6", "e6", 12, "h6"),
+                transfer("c", "d1", "e9", 10, "h9"),
+                transfer("b", "d6", "e6", 12, "h6"),
             ],
             expected: vec![
                 base("b", Some(12), "d6", "h6", "e6"),
@@ -128,7 +131,7 @@ fn next_common_state() {
             old: vec![base("a", Some(1), "d1", "h1", "e1")],
             local: vec![local("a", 1, "h3")],
             remote: vec![remote("a", "d1", "e2")],
-            transfers: vec![transfer("d1", "e2", 1, "h2")],
+            transfers: vec![transfer("a", "d1", "e2", 1, "h2")],
             expected: vec![base("a", Some(1), "d1", "h1", "e1")],
         },
         Case {
@@ -144,7 +147,7 @@ fn next_common_state() {
             old: vec![base("a", Some(1), "d1", "h1", "e1")],
             local: vec![local("b", 1, "hb")],
             remote: vec![remote("a", "d1", "e1"), remote("b", "d2", "eb")],
-            transfers: vec![transfer("d2", "eb", 1, "hb")],
+            transfers: vec![transfer("b", "d2", "eb", 1, "hb")],
             expected: vec![
                 base("a", None, "d1", "h1", "e1"),
                 base("b", Some(1), "d2", "hb", "eb"),
@@ -177,7 +180,10 @@ fn next_common_state() {
             old: vec![],
             local: vec![local("a", 1, "h2")],
             remote: vec![remote("a", "d1", "e2")],
-            transfers: vec![transfer("d1", "e1", 1, "h1"), transfer("d1", "e2", 1, "h2")],
+            transfers: vec![
+                transfer("a", "d1", "e1", 1, "h1"),
+                transfer("a", "d1", "e2", 1, "h2"),
+            ],
             expected: vec![base("a", Some(1), "d1", "h2", "e2")],
         },
     ];

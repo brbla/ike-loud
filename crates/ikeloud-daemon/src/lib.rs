@@ -11,4 +11,4 @@ mod remote;
 mod run;
 
 pub use remote::{Download, Listing, Remote, RemoteError, Written};
-pub use run::{RunOutcome, RunReport, SyncSetup, sync_once};
+pub use run::{ExecutedRun, RunOutcome, RunReport, Started, SyncSetup, start_run, sync_once};

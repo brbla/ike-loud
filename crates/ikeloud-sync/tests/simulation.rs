@@ -594,7 +594,7 @@ impl World {
                         content: l.content,
                     },
                 );
-                Ok(Some(transfer(doc, etag, &l)))
+                Ok(Some(transfer(remote, doc, etag, &l)))
             }
             Action::UploadConflictCopy { path, local_id, .. } => {
                 let Some(l) = self.local_if(path, local_id) else {
@@ -612,7 +612,7 @@ impl World {
                         content: l.content,
                     },
                 );
-                Ok(Some(transfer(doc, etag, &l)))
+                Ok(Some(transfer(path, doc, etag, &l)))
             }
             Action::TrashRemote {
                 path,
@@ -670,7 +670,7 @@ impl World {
                 }
                 // Written to a temporary file and renamed over: a new inode.
                 let f = self.new_file(r.content);
-                let t = transfer(r.doc, r.etag, &f);
+                let t = transfer(remote, r.doc, r.etag, &f);
                 self.local.insert(local.as_str().into(), f);
                 Ok(Some(t))
             }
@@ -712,8 +712,9 @@ fn copy_name(p: &RelPath, n: u32) -> Option<RelPath> {
     RelPath::parse(format!("{} (conflict {n})", p.as_str())).ok()
 }
 
-fn transfer(doc: u64, etag: u64, l: &LFile) -> Transfer {
+fn transfer(path: &RelPath, doc: u64, etag: u64, l: &LFile) -> Transfer {
     Transfer {
+        path: path.clone(),
         doc_id: DocId::new(doc.to_string()),
         etag: Etag::new(etag.to_string()),
         local: World::id(l),

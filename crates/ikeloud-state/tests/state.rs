@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use ikeloud_safety::RelPath;
 use ikeloud_state::{BaseChange, JournalEntry, JournalKind, StateDb, StateError};
 use ikeloud_sync::{BaseEntry, DocId};
-use ikeloud_testkit::base as entry;
+use ikeloud_testkit::{base as entry, transfer};
 
 fn set(path: &str, n: u64, doc: &str, hash: &str, etag: &str) -> BaseChange {
     BaseChange::Set(entry(path, n, doc, hash, etag))
@@ -411,4 +411,42 @@ fn entries_without_a_known_inode() {
     )
     .expect("commit");
     assert_eq!(db.base().expect("read"), vec![a, b]);
+}
+
+#[test]
+fn recorded_actions_survive_until_the_commit() {
+    let dir = TempDir::new("pending");
+    {
+        let mut db = StateDb::open(&dir.db()).expect("create");
+        db.record(
+            &log(1, JournalKind::Uploaded, "a", None),
+            Some(&transfer("a", "d1", "e1", 1, "h1")),
+        )
+        .expect("record");
+        db.record(&log(2, JournalKind::TrashedLocal, "b", None), None)
+            .expect("record");
+        db.record(
+            &log(3, JournalKind::Downloaded, "c", None),
+            Some(&transfer("c", "d3", "e3", 3, "h3")),
+        )
+        .expect("record");
+        // The process dies here: no commit.
+    }
+    let mut db = StateDb::open(&dir.db()).expect("reopen");
+    assert_eq!(
+        db.pending().expect("pending"),
+        vec![
+            transfer("a", "d1", "e1", 1, "h1"),
+            transfer("c", "d3", "e3", 3, "h3")
+        ],
+        "what the actions proved, in order"
+    );
+    assert_eq!(db.journal(10).expect("journal").len(), 3, "and the journal");
+    db.commit(&[set("a", 1, "d1", "h1", "e1")], &[])
+        .expect("commit");
+    assert_eq!(
+        db.pending().expect("pending"),
+        vec![],
+        "the commit clears them"
+    );
 }

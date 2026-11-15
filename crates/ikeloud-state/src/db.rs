@@ -4,13 +4,16 @@ use std::path::Path;
 
 use ikeloud_safety::{ContentHash, Etag, LocalId, RelPath};
 use ikeloud_sync::names::key;
-use ikeloud_sync::{BaseEntry, DocId};
+use ikeloud_sync::{BaseEntry, DocId, Transfer};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{BaseChange, JournalEntry, JournalKind, StateError};
 
 /// Schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
+
+/// Migrations: `MIGRATIONS[v]` brings version `v` to `v + 1`.
+const MIGRATIONS: [&str; 2] = [SCHEMA_V1, SCHEMA_V2];
 
 const SCHEMA_V1: &str = "
 CREATE TABLE base (
@@ -33,6 +36,22 @@ CREATE TABLE journal (
     kind   TEXT NOT NULL,
     path   TEXT NOT NULL CHECK (path <> ''),
     target TEXT CHECK (target IS NULL OR target <> '')
+) STRICT;
+";
+
+/// Version 2: transfers of actions done but not yet in the common state.
+/// Each action records its transfer at once, so a crash before the end of a
+/// run does not forget what the action proved (docs/rozhodnuti/0017).
+const SCHEMA_V2: &str = "
+CREATE TABLE pending (
+    seq      INTEGER PRIMARY KEY,
+    path     TEXT NOT NULL CHECK (path <> ''),
+    doc_id   TEXT NOT NULL CHECK (doc_id <> ''),
+    etag     TEXT NOT NULL CHECK (etag <> ''),
+    device   INTEGER NOT NULL,
+    inode    INTEGER NOT NULL,
+    birth_ns INTEGER,
+    hash     TEXT NOT NULL CHECK (hash <> '')
 ) STRICT;
 ";
 
@@ -81,21 +100,26 @@ impl StateDb {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(open_err)?;
-        match version {
-            0 => {
-                let tx = self.conn.transaction().map_err(sql)?;
-                tx.execute_batch(SCHEMA_V1).map_err(sql)?;
-                tx.pragma_update(None, "user_version", SCHEMA_VERSION)
-                    .map_err(sql)?;
-                tx.commit().map_err(sql)
-            }
-            SCHEMA_VERSION => Ok(()),
-            found if found > SCHEMA_VERSION => Err(StateError::NewerSchema {
-                found,
+        if version > SCHEMA_VERSION {
+            return Err(StateError::NewerSchema {
+                found: version,
                 supported: SCHEMA_VERSION,
-            }),
-            found => Err(StateError::Open(format!("unknown schema version {found}"))),
+            });
         }
+        let from = usize::try_from(version)
+            .map_err(|_| StateError::Open(format!("unknown schema version {version}")))?;
+        let steps = MIGRATIONS.get(from..).unwrap_or_default();
+        if steps.is_empty() {
+            return Ok(());
+        }
+        // All steps in one transaction: a crash leaves the old version.
+        let tx = self.conn.transaction().map_err(sql)?;
+        for step in steps {
+            tx.execute_batch(step).map_err(sql)?;
+        }
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .map_err(sql)?;
+        tx.commit().map_err(sql)
     }
 
     /// The last common state of all files, sorted by normalized name.
@@ -165,21 +189,80 @@ impl StateDb {
             }
         }
         for entry in journal {
-            let time = i64::try_from(entry.time)
-                .map_err(|_| StateError::InvalidValue { field: "time" })?;
+            insert_journal(&tx, entry)?;
+        }
+        // The common state now holds what the pending transfers proved.
+        tx.execute("DELETE FROM pending", []).map_err(sql)?;
+        // Dropping `tx` without commit (any `?` above) rolls everything back.
+        tx.commit().map_err(sql)
+    }
+
+    /// Records one carried-out action at once, in its own transaction: its
+    /// journal entry and, for a transfer, what it proved. Survives a crash
+    /// before the end of the run; [`StateDb::commit`] clears the transfers.
+    pub fn record(
+        &mut self,
+        entry: &JournalEntry,
+        transfer: Option<&Transfer>,
+    ) -> Result<(), StateError> {
+        let tx = self.conn.transaction().map_err(sql)?;
+        insert_journal(&tx, entry)?;
+        if let Some(t) = transfer {
             tx.execute(
-                "INSERT INTO journal (time, kind, path, target) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO pending (doc_id, etag, device, inode, birth_ns, hash, path)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
-                    time,
-                    entry.kind.name(),
-                    entry.path.as_str(),
-                    entry.target.as_ref().map(RelPath::as_str)
+                    t.doc_id.as_str(),
+                    t.etag.as_str(),
+                    u64_to_sql(t.local.device),
+                    u64_to_sql(t.local.inode),
+                    t.local.birth_ns,
+                    t.hash.as_str(),
+                    t.path.as_str()
                 ],
             )
             .map_err(sql)?;
         }
-        // Dropping `tx` without commit (any `?` above) rolls everything back.
         tx.commit().map_err(sql)
+    }
+
+    /// Transfers recorded since the last commit, in the order they happened.
+    pub fn pending(&self) -> Result<Vec<Transfer>, StateError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT doc_id, etag, device, inode, birth_ns, hash, path FROM pending ORDER BY seq",
+            )
+            .map_err(sql)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                ))
+            })
+            .map_err(sql)?;
+        let mut transfers = Vec::new();
+        for row in rows {
+            let (doc, etag, device, inode, birth_ns, hash, path) = row.map_err(sql)?;
+            transfers.push(Transfer {
+                path: stored_path("pending", path)?,
+                doc_id: DocId::new(doc),
+                etag: Etag::new(etag),
+                local: LocalId {
+                    device: u64_from_sql(device),
+                    inode: u64_from_sql(inode),
+                    birth_ns,
+                },
+                hash: ContentHash::new(hash),
+            });
+        }
+        Ok(transfers)
     }
 
     /// The newest `limit` journal entries, newest first.
@@ -233,6 +316,21 @@ impl StateDb {
         }
         Ok(entries)
     }
+}
+
+fn insert_journal(tx: &rusqlite::Transaction<'_>, entry: &JournalEntry) -> Result<(), StateError> {
+    let time = i64::try_from(entry.time).map_err(|_| StateError::InvalidValue { field: "time" })?;
+    tx.execute(
+        "INSERT INTO journal (time, kind, path, target) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            time,
+            entry.kind.name(),
+            entry.path.as_str(),
+            entry.target.as_ref().map(RelPath::as_str)
+        ],
+    )
+    .map_err(sql)?;
+    Ok(())
 }
 
 /// Checks an entry against the state stored so far in this transaction, so
@@ -393,6 +491,36 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn a_version_1_database_is_migrated_keeping_its_data() {
+        let path = temp_file("migrate");
+        {
+            // A database as version 1 wrote it.
+            let conn = rusqlite::Connection::open(&path).expect("raw open");
+            conn.execute_batch(super::SCHEMA_V1).expect("v1 schema");
+            conn.execute(
+                "INSERT INTO base (doc_id, device, inode, key, path, local_path, hash, etag)
+                 VALUES ('d', 1, 1, 'a', 'a', 'a', 'h', 'e')",
+                [],
+            )
+            .expect("row");
+            conn.pragma_update(None, "user_version", 1)
+                .expect("version");
+        }
+        let db = StateDb::open(&path).expect("migrate");
+        assert_eq!(db.base().expect("base").len(), 1, "data kept");
+        assert_eq!(
+            db.pending().expect("pending"),
+            vec![],
+            "the new table exists"
+        );
+        let v: i64 = db
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("read");
+        assert_eq!(v, SCHEMA_VERSION);
     }
 
     #[test]

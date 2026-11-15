@@ -68,9 +68,11 @@ pub fn base(path: &str, n: impl Into<Option<u64>>, doc: &str, hash: &str, etag: 
     }
 }
 
-/// What a transfer of document `doc` to local file number `n` produced.
-pub fn transfer(doc: &str, etag: &str, n: u64, hash: &str) -> Transfer {
+/// What a transfer of document `doc` at server path `path` to local file
+/// number `n` produced.
+pub fn transfer(path: &str, doc: &str, etag: &str, n: u64, hash: &str) -> Transfer {
     Transfer {
+        path: p(path),
         doc_id: DocId::new(doc),
         etag: Etag::new(etag),
         local: id(n),

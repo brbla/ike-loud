@@ -44,7 +44,7 @@ fn approved(actions: Vec<Action>) -> Vec<ApprovedAction> {
 }
 
 fn transfer(doc: &str) -> Transfer {
-    ikeloud_testkit::transfer(doc, "e", 1, "h")
+    ikeloud_testkit::transfer("f", doc, "e", 1, "h")
 }
 
 #[test]

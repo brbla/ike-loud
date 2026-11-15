@@ -26,6 +26,10 @@ use crate::state::{BaseEntry, DocId, LocalFile, RemoteFile, States};
 /// at version `etag` now hold the same content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transfer {
+    /// The server path the transfer wrote or read. For a new document it is
+    /// the path both sides agreed on at that moment: should one side move
+    /// the file right after, this tells which one did.
+    pub path: RelPath,
     /// Server document.
     pub doc_id: DocId,
     /// Its version after the transfer.
@@ -68,7 +72,7 @@ pub fn next_base(old: &[BaseEntry], after: &States, transfers: &[Transfer]) -> V
             continue;
         }
         next.push(BaseEntry {
-            path: common_path(old_by_doc.get(doc).map(|b| &b.path), l, r),
+            path: common_path(Some(old_by_doc.get(doc).map_or(&t.path, |b| &b.path)), l, r),
             local_path: l.path.clone(),
             local: Some(l.id),
             doc_id: doc.clone(),
@@ -96,12 +100,17 @@ pub fn next_base(old: &[BaseEntry], after: &States, transfers: &[Transfer]) -> V
         if let Some(l) = l {
             entry.local_path = l.path.clone();
         }
-        if let (Some(l), Some(r)) = (l, r)
-            && l.hash == b.hash
-            && r.etag == b.etag
-        {
-            entry.path = common_path(Some(&b.path), l, r);
-        }
+        // The stored path must be one a side of this file still holds,
+        // whatever happened to the content (the path is a component of its
+        // own, as in NewBase of the TLA+ models): a path nobody holds may be
+        // taken by another document, which would then collide with this
+        // entry (found by the daemon simulation).
+        entry.path = match (l, r) {
+            (Some(l), Some(r)) => common_path(Some(&b.path), l, r),
+            (Some(l), None) => l.path.clone(),
+            (None, Some(r)) => r.path.clone(),
+            (None, None) => b.path.clone(),
+        };
         used_local.extend(entry.local);
         used_docs.insert(b.doc_id.clone());
         next.push(entry);
