@@ -63,7 +63,7 @@ a spouští jen při změně bezpečnostní vrstvy. Mutace soubor s důkazy
 vynechávají: v běžném buildu se nepřekládá, a jeho mutanty by proto nešlo
 chytit.
 
-## Vědomě ne
+## Vědomě ne (schválil uživatel 2026-11-15)
 
 **proptest.** Zadání chce property-based testy s náhodnými sekvencemi změn
 na obou stranách a tvrzením, že žádný obsah nezmizí. Přesně to dělá
@@ -71,13 +71,14 @@ deterministická simulace (0011, 0012), a to vlastním generátorem bez
 závislostí. Proptest by přidal přes deset crate, které podle zásady
 „nevěříme nikomu“ (0007) nikdo z nás nečetl. Jediná jeho výhoda navíc je
 zmenšování chybového případu, a simulace místo toho vypisuje seed a celý
-průběh. **Návrh:** proptest nepřidávat. Kdyby se zmenšování ukázalo jako
+průběh. **Rozhodnutí:** proptest nepřidávat. Kdyby se zmenšování ukázalo jako
 potřebné, napíšeme ho do simulace sami.
 
 **zeroize** pro tajemství SRP. `BigUint` drží tajemství ve `Vec<u64>`, které
 bez unsafe kódu vymazat nejde. Vymazat jen některé kopie by předstíralo
 ochranu, která neexistuje. Klient žije jedno přihlášení. Skutečné opatření
 patří do démona: proces bez core dumpů (`PR_SET_DUMPABLE`), milník 1.
+**Rozhodnutí:** zeroize nepřidávat, místo něj zákaz core dumpů v démonu.
 
 ## Zbývá
 

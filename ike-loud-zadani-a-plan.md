@@ -240,7 +240,7 @@ Změnu typu zachytí Rust už při překladu. Změnu hodnoty při stejném typu 
 
 - Samostatný testovací Apple účet s iCloud Drive pro všechny integrační testy; nikdy ne účet vývojáře.
 - Simulátor serveru (fake `ikeloud-api`) pro testy engine: konflikty, výpadky, prázdné výpisy, přerušené přenosy.
-- Property-based testy (`proptest`): náhodné sekvence změn na obou stranách; tvrzení, že žádný obsah nezmizí bez záznamu v koši nebo konfliktu.
+- Property-based testy: náhodné sekvence změn na obou stranách; tvrzení, že žádný obsah nezmizí bez záznamu v koši nebo konfliktu. Dělá je vlastní deterministická simulace, bez knihovny `proptest` (rozhodnutí 0013).
 - Testy pádu: zabít démona v náhodném okamžiku a ověřit konzistenci po restartu.
 - Kontrolní běh na pozadí: porovnání kontrolních součtů lokálně a na serveru, hlášení rozdílů.
 
@@ -346,6 +346,7 @@ Do verze 1.0 je to zhruba 8 až 9 měsíců. Pořadí se oproti fázím v zadán
 - Produkční `ikeloud-api`: typované chyby, opakování, omezení rychlosti, pevný seznam domén.
 - Stav v SQLite, stahování do dočasných souborů, obnova po pádu.
 - Démon, D-Bus rozhraní a GUI: průvodce, okno stavu, oznámení, opětovné přihlášení.
+- Démon zakáže ukládání své paměti při pádu (core dump), aby v ní nezůstala tajemství z přihlášení (rozhodnutí 0013).
 - Flatpak balíček hned, aby sandbox nepřekvapil na konci.
 - Denní kanárek: automatická kontrola proti testovacímu účtu.
 
@@ -356,7 +357,7 @@ Do verze 1.0 je to zhruba 8 až 9 měsíců. Pořadí se oproti fázím v zadán
 - Falešný server s řízeným časem a poruchami.
 - `ikeloud-sync`: plán ze tří stavů, přesuny, konflikty, normalizace názvů.
 - `ikeloud-safety`: pravidla z kapitoly Ochrana dat a schvalovací token v typovém systému.
-- Tabulkové testy, proptest, Kani, mutation testing a deterministická simulace.
+- Tabulkové testy, Kani, mutation testing a deterministická simulace (ta nahrazuje proptest, rozhodnutí 0013).
 
 **Brána:** milion simulovaných scénářů bez ztráty obsahu. Pokrytí aspoň 90 %. V `ikeloud-safety` nepřežije žádný mutant bez zdůvodněné výjimky. Kani ověří brzdu a schvalování. Každé pravidlo z Ochrany dat má test, že nebezpečnou akci zastaví.
 
