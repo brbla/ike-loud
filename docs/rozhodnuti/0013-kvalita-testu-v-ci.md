@@ -44,6 +44,25 @@ navzájem přepisovaly keš.
 **Simulace v CI** běží s optimalizací pro `ikeloud-sync`, `ikeloud-safety`
 a `unicode-normalization` i v debug buildu. Místo 30 s trvá 3 s.
 
+**Kani** (job `kani`) dokazuje pro všechny vstupy dvě vlastnosti brzdy
+(`crates/ikeloud-safety/src/proofs.rs`):
+
+- výchozí limity: do 10 smazaných souborů nikdy nebrzdí, nad 50 vždy, pro
+  jakýkoli počet synchronizovaných souborů (0,1 s);
+- víc změn brzdu nikdy nevypne, pro všechny hodnoty `u64` včetně limitů
+  (108 s).
+
+Třetí vlastnost („víc synchronizovaných souborů brzdu nezapne“) solver
+nedokázal ani za 15 minut, ani s mezí 4 miliardy souborů, a proto byla
+vyřazena. Kani se instaluje z předpřipraveného balíku z GitHubu (140 MB).
+Podle zásady 0007 je verze i kontrolní součet balíku připnutý ve
+`scripts/kani-setup.sh`, stejně jako u `tla2tools.jar`. Součet pochází
+z našeho vlastního stažení. Stejně jako mutace se úspěšný běh pamatuje pod
+otiskem všech vstupů (`ci-cache-key.sh --kani`), takže se Kani instaluje
+a spouští jen při změně bezpečnostní vrstvy. Mutace soubor s důkazy
+vynechávají: v běžném buildu se nepřekládá, a jeho mutanty by proto nešlo
+chytit.
+
 ## Vědomě ne
 
 **proptest.** Zadání chce property-based testy s náhodnými sekvencemi změn
@@ -62,20 +81,6 @@ patří do démona: proces bez core dumpů (`PR_SET_DUMPABLE`), milník 1.
 
 ## Zbývá
 
-- **Kani v CI.** Důkazy jsou napsané a lokálně projdou
-  (`scripts/kani.sh`, modul `proofs` v `crates/ikeloud-safety/src/context.rs`):
-  - výchozí limity brzdy: do 10 smazaných souborů nikdy nebrzdí, nad 50 vždy,
-    pro jakýkoli počet synchronizovaných souborů (0,1 s);
-  - víc změn brzdu nikdy nevypne, pro všechny hodnoty `u64` včetně limitů
-    (108 s).
-
-  Třetí vlastnost („víc synchronizovaných souborů brzdu nezapne“) solver
-  nedokázal ani za 15 minut, ani s mezí 4 miliardy souborů, a proto byla
-  vyřazena. Do CI Kani zatím nejde: instaluje se jako předpřipravený balík
-  z GitHubu (asi 500 MB, CBMC a vlastní nightly toolchain). Podle zásady 0007
-  ho nejdřív připneme kontrolním součtem stejně jako `tla2tools.jar`. Pak
-  poběží jen při změně bezpečnostní vrstvy, se stejným otiskem vstupů jako
-  mutace.
 - **`cargo vet` má 60 výjimek a žádný audit.** Projde, ale nic tím
   neověřuje. Audity musí udělat člověk; seznam výjimek je dluh, který se
   bude splácet od nejmenších crate.

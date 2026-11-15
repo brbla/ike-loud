@@ -27,8 +27,8 @@ env:
 #   fails the build if any of them was not compiled from current sources.
 # - Exact keys only (no restore-keys), so an older cache is never reused.
 # - Test and model-checking results are never cached, with one exception:
-#   a passed mutation run of the safety layer, under the fingerprint of every
-#   input of that run (scripts/ci-cache-key.sh --mutants, tested by
+#   a passed mutation run and passed Kani proofs of the safety layer, each
+#   under the fingerprint of every input of that run (scripts/ci-cache-key.sh --mutants, tested by
 #   scripts/test-cache-key.sh). Any change to the safety crate runs it again.
 # Actions are pinned to commit SHAs.
 
@@ -250,3 +250,45 @@ jobs:
         with:
           path: .mutants-passed
           key: ${{ steps.mutants-key.outputs.key }}
+
+  # Kani proofs of the safety layer (crates/ikeloud-safety/src/proofs.rs).
+  # Installing Kani is heavy (a 140 MB bundle and its own toolchain), so
+  # everything is skipped while the safety layer is unchanged since the last
+  # passed run.
+  kani:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+
+      - name: Fingerprint of the proof inputs
+        id: kani-key
+        run: |
+          scripts/ci-cache-key.sh --kani --explain
+          echo "key=$(scripts/ci-cache-key.sh --kani)" >> "$GITHUB_OUTPUT"
+
+      - name: Did this exact safety layer already pass?
+        id: kani-passed
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .kani-passed
+          key: ${{ steps.kani-key.outputs.key }}
+
+      - name: Install Kani (pinned version, verified bundle)
+        if: steps.kani-passed.outputs.cache-hit != 'true'
+        run: scripts/kani-setup.sh
+
+      - name: Kani proofs
+        if: steps.kani-passed.outputs.cache-hit != 'true'
+        run: |
+          scripts/kani.sh
+          echo "${{ steps.kani-key.outputs.key }}" > .kani-passed
+
+      - name: Remember the passed proofs
+        if: steps.kani-passed.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .kani-passed
+          key: ${{ steps.kani-key.outputs.key }}

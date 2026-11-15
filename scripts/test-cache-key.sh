@@ -14,7 +14,8 @@ trap 'rm -rf "$WORK"' EXIT
 cd "$ROOT"
 mkdir -p "$WORK/repo"
 {
-    printf '%s\n' scripts/ci-cache-key.sh scripts/mutants.sh Cargo.lock Cargo.toml \
+    printf '%s\n' scripts/ci-cache-key.sh scripts/mutants.sh scripts/kani.sh scripts/kani-setup.sh \
+        Cargo.lock Cargo.toml \
         .cargo/config.toml rust-toolchain.toml README.md crates/ikeloud-sync/src/lib.rs
     find crates -mindepth 2 -maxdepth 2 -name Cargo.toml
     find crates/ikeloud-safety -type f
@@ -138,6 +139,24 @@ check "mutants: RUSTFLAGS" different export RUSTFLAGS=changed
 fake_tool rustc "rustc 0.0.0-fake"
 check "mutants: rustc version" different export PATH="$FAKE:$PATH"
 rm "$FAKE/rustc"
+check "mutants: the Kani scripts" same edit scripts/kani.sh
+
+# The key of passed Kani proofs (--kani): the same inputs, its own scripts.
+MODE=(--kani)
+baseline="$(cd "$REPO" && "$KEY" --kani)"
+[[ "$baseline" != "$(cd "$REPO" && "$KEY" --mutants)" ]] || {
+    echo "FAIL kani and mutants share a key" >&2
+    exit 1
+}
+check "kani: repeated run" same true
+check "kani: another crate's code" same edit crates/ikeloud-sync/src/lib.rs
+check "kani: safety source" different edit crates/ikeloud-safety/src/lib.rs
+check "kani: the proofs" different edit crates/ikeloud-safety/src/proofs.rs
+check "kani: workspace manifest" different edit Cargo.toml
+check "kani: rust-toolchain.toml" different edit rust-toolchain.toml
+check "kani: the script" different edit scripts/kani.sh
+check "kani: version and bundle checksum" different edit scripts/kani-setup.sh
+check "kani: the mutants script" same edit scripts/mutants.sh
 MODE=()
 
 # The tool cache key (--tools): pins, toolchain and platform change it.

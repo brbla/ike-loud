@@ -14,7 +14,8 @@ than no cache.
 1. **Cache only what did not change.** Today that is compiled third-party
    dependencies from `vendor/` (`target/`), pinned tools (cargo-deny,
    cargo-audit, cargo-vet, cargo-llvm-cov, cargo-mutants, Java, TLC), and
-   one result: a **passed** mutation run of `ikeloud-safety` (rule 10).
+   two results: a **passed** mutation run and **passed** Kani proofs of
+   `ikeloud-safety` (rule 10).
    Other results (tests, clippy, coverage, TLC, audits) are never cached.
 2. **Our own crates are never cached.** `scripts/ci-clean-workspace.sh`
    removes their artifacts after restoring and before saving the cache.
@@ -55,9 +56,11 @@ than no cache.
 9. **The key must be deterministic.** The test computes it 21 times. Never
    pipe a multi-line command into `head` under `pipefail` (SIGPIPE race).
 10. **A result may be cached only when it is slow, and only under the
-   fingerprint of everything it depends on** (`--mutants`): the safety crate
-   with its tests, workspace manifests and lock, cargo config, toolchain,
-   build environment, the tool pin and `scripts/mutants.sh`. Only a passed
+   fingerprint of everything it depends on** (`--mutants`, `--kani`): the
+   safety crate with its tests, workspace manifests and lock, cargo config,
+   toolchain, build environment, tool pins and the run's own scripts
+   (`scripts/mutants.sh`; `scripts/kani.sh` and `scripts/kani-setup.sh` with
+   Kani's version and bundle checksum). Only a passed
    run is remembered; any change runs it again. The test asserts every one
    of these inputs changes the key and other crates' code does not.
 

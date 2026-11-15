@@ -39,7 +39,7 @@ kontrola závislostí, `cargo deny` a `cargo audit`.
 | `cargo vendor` a `cargo vet` | s první externí závislostí | zapnuto (0007) |
 | `cargo llvm-cov` (90 % u safety a sync) | s prvním kódem v safety a sync | zapnuto pozdě, až po revizi (0013) |
 | `cargo-mutants` u safety | s prvním pravidlem v safety | zapnuto pozdě, až po revizi (0013) |
-| Kani | s funkcí, která posuzuje plán akcí | zatím ne (0013) |
+| Kani | s funkcí, která posuzuje plán akcí | zapnuto pozdě, pro brzdu (0013) |
 | Deterministická simulace | milník 2 | zapnuto (0011, 0012) |
 
 Zapnout tyto nástroje nad prázdnými crates by nic neověřilo a jen by

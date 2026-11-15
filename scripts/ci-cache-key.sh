@@ -11,16 +11,19 @@
 #        scripts/ci-cache-key.sh --tools SET      -> key of the CI tool cache SET
 #        scripts/ci-cache-key.sh --tools SET --explain
 #        scripts/ci-cache-key.sh --mutants        -> key of a passed mutation run
-#        scripts/ci-cache-key.sh --mutants --explain
+#        scripts/ci-cache-key.sh --kani           -> key of passed Kani proofs
+#        scripts/ci-cache-key.sh --mutants|--kani --explain
 # --tools fingerprints the name of the tool set (each CI job caches its own
 # tools), the platform, the Rust toolchain active in the current directory
 # and every pinned tool version: all variables CARGO_*_VERSION, so a new pin
 # is covered without touching this script.
 #
-# --mutants fingerprints everything a run of scripts/mutants.sh depends on:
-# the safety crate (sources and tests), workspace manifests and lock, cargo
-# config, toolchain, build environment (including the tool pin) and the
-# script itself. A passed run under the same key need not run again.
+# --mutants and --kani fingerprint everything a run of scripts/mutants.sh or
+# scripts/kani.sh depends on: the safety crate (sources and tests),
+# workspace manifests and lock, cargo config, toolchain, build environment
+# (including tool pins) and the scripts themselves (Kani's version and
+# bundle checksum live in scripts/kani-setup.sh). A passed run under the
+# same key need not run again.
 #
 # Adding an input: add it below AND a case to scripts/test-cache-key.sh.
 # Rules: .claude/skills/ci-cache/SKILL.md
@@ -85,23 +88,27 @@ inputs() {
     done
 }
 
-mutant_inputs() {
-    echo "schema: mutants-$SCHEMA"
+result_inputs() { # name, scripts...
+    echo "schema: $1-$SCHEMA"
+    shift
     platform
     env | grep -E "^($ENV_PATTERN)=" | sort | sed 's/^/env /' || true
     {
-        printf '%s\n' Cargo.lock Cargo.toml .cargo/config.toml rust-toolchain.toml \
-            scripts/mutants.sh
+        printf '%s\n' Cargo.lock Cargo.toml .cargo/config.toml rust-toolchain.toml "$@"
         find crates/ikeloud-safety -type f
     } | sort | while read -r file; do
         echo "file $file: $(sha256sum "$file" | cut -d' ' -f1)"
     done
 }
 
-if [[ "${1:-}" == "--mutants" ]]; then
+if [[ "${1:-}" == "--mutants" || "${1:-}" == "--kani" ]]; then
     cd "$ROOT"
-    if [[ "${2:-}" == "--explain" ]]; then mutant_inputs; exit 0; fi
-    echo "mutants-passed-$(uname -s)-$(mutant_inputs | sha256sum | cut -c1-32)"
+    case "$1" in
+        --mutants) inputs_of() { result_inputs mutants scripts/mutants.sh; } ;;
+        --kani) inputs_of() { result_inputs kani scripts/kani.sh scripts/kani-setup.sh; } ;;
+    esac
+    if [[ "${2:-}" == "--explain" ]]; then inputs_of; exit 0; fi
+    echo "${1#--}-passed-$(uname -s)-$(inputs_of | sha256sum | cut -c1-32)"
     exit 0
 fi
 

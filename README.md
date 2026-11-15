@@ -35,7 +35,7 @@ Mimo rozsah: kalendář a kontakty (ty pokrývá CalDAV/CardDAV v GNOME a KDE), 
 
 Celé to bude v Rustu. Synchronizační démon poběží jako uživatelská služba a GUI v GTK4 a libadwaita s ním bude mluvit přes D-Bus. Chybějící oficiální dokumentaci API nahradí znalosti z backendu `iclouddrive` v [rclone](https://rclone.org/iclouddrive/) a z knihovny [pyicloud](https://pypi.org/project/pyicloud/).
 
-Synchronizaci a bezpečnostní vrstvu hlídají tabulkové testy, model checking v TLA+, deterministická simulace s nepřátelským světem, měření pokrytí a mutation testing. Distribuovat se bude hlavně přes Flatpak.
+Synchronizaci a bezpečnostní vrstvu hlídají tabulkové testy, model checking v TLA+, důkazy v Kani, deterministická simulace s nepřátelským světem, měření pokrytí a mutation testing. Distribuovat se bude hlavně přes Flatpak.
 
 ## Překlady
 
