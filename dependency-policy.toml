@@ -17,7 +17,8 @@ dev = []
 
 [crates.ikeloud-api]
 internal = ["ikeloud-safety"]
-external = []
+# SRP-6a: velká čísla, SHA-256, PBKDF2 a náhodné tajemství klienta (src/srp.rs)
+external = ["num-bigint", "sha2", "pbkdf2", "getrandom"]
 dev = []
 
 [crates.ikeloud-sync]
