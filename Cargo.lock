@@ -193,6 +193,13 @@ version = "0.0.0"
 [[package]]
 name = "ikeloud-daemon"
 version = "0.0.0"
+dependencies = [
+ "ikeloud-hash",
+ "ikeloud-local",
+ "ikeloud-safety",
+ "ikeloud-state",
+ "ikeloud-sync",
+]
 
 [[package]]
 name = "ikeloud-gui"

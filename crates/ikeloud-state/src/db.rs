@@ -185,12 +185,26 @@ impl StateDb {
     /// The newest `limit` journal entries, newest first.
     pub fn journal(&self, limit: usize) -> Result<Vec<JournalEntry>, StateError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let mut stmt = self
-            .conn
-            .prepare("SELECT time, kind, path, target FROM journal ORDER BY id DESC LIMIT ?1")
-            .map_err(sql)?;
+        self.query_journal(
+            "SELECT time, kind, path, target FROM journal ORDER BY id DESC LIMIT ?1",
+            limit,
+        )
+    }
+
+    /// Journal entries from `since` (Unix seconds) on, newest first: what
+    /// happened in the mass-change brake window.
+    pub fn journal_since(&self, since: u64) -> Result<Vec<JournalEntry>, StateError> {
+        let since = i64::try_from(since).map_err(|_| StateError::InvalidValue { field: "time" })?;
+        self.query_journal(
+            "SELECT time, kind, path, target FROM journal WHERE time >= ?1 ORDER BY id DESC",
+            since,
+        )
+    }
+
+    fn query_journal(&self, query: &str, value: i64) -> Result<Vec<JournalEntry>, StateError> {
+        let mut stmt = self.conn.prepare(query).map_err(sql)?;
         let rows = stmt
-            .query_map(params![limit], |r| {
+            .query_map(params![value], |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
                     r.get::<_, String>(1)?,

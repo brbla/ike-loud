@@ -38,6 +38,8 @@ pub enum StopReason {
     NoSpace,
     /// The server answered something unknown (switch to read-only mode).
     UnknownResponse,
+    /// The local disk refused (read-only, permissions, another filesystem).
+    LocalDisk,
 }
 
 /// The side effects of sync: implemented by the daemon over the local disk

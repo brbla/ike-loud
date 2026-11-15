@@ -69,9 +69,9 @@ pub enum BaseChange {
 /// Kind of a journal entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JournalKind {
-    /// A file was uploaded.
+    /// A new file was uploaded.
     Uploaded,
-    /// A file was downloaded.
+    /// A new file was downloaded.
     Downloaded,
     /// A file was moved to the iCloud trash.
     TrashedRemote,
@@ -85,11 +85,18 @@ pub enum JournalKind {
     ConflictCopy,
     /// A folder was created on iCloud.
     FolderCreated,
+    /// A file on iCloud was overwritten by the local version.
+    OverwrittenRemote,
+    /// A local file was overwritten by the iCloud version (the old one is in
+    /// the local history).
+    OverwrittenLocal,
+    /// The user confirmed a mass change; the brake window starts again.
+    MassChangeConfirmed,
 }
 
 impl JournalKind {
     /// All kinds (for tests and for the GUI filter).
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 11] = [
         Self::Uploaded,
         Self::Downloaded,
         Self::TrashedRemote,
@@ -98,6 +105,9 @@ impl JournalKind {
         Self::MovedLocal,
         Self::ConflictCopy,
         Self::FolderCreated,
+        Self::OverwrittenRemote,
+        Self::OverwrittenLocal,
+        Self::MassChangeConfirmed,
     ];
 
     /// Stable name stored in the database. Never change an existing name.
@@ -111,6 +121,9 @@ impl JournalKind {
             Self::MovedLocal => "moved-local",
             Self::ConflictCopy => "conflict-copy",
             Self::FolderCreated => "folder-created",
+            Self::OverwrittenRemote => "overwritten-remote",
+            Self::OverwrittenLocal => "overwritten-local",
+            Self::MassChangeConfirmed => "mass-change-confirmed",
         }
     }
 

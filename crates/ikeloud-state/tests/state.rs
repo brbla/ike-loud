@@ -293,6 +293,32 @@ fn journal_order_limit_and_kinds() {
 }
 
 #[test]
+fn journal_of_a_time_window() {
+    let mut db = StateDb::open_in_memory().expect("open");
+    let entries: Vec<JournalEntry> = [5, 10, 20, 30]
+        .into_iter()
+        .map(|t| log(t, JournalKind::TrashedRemote, &format!("f{t}"), None))
+        .collect();
+    db.commit(&[], &entries).expect("commit");
+    let times: Vec<u64> = db
+        .journal_since(10)
+        .expect("read")
+        .iter()
+        .map(|e| e.time)
+        .collect();
+    assert_eq!(
+        times,
+        vec![30, 20, 10],
+        "from the start of the window, newest first"
+    );
+    assert_eq!(db.journal_since(31).expect("read"), vec![]);
+    assert_eq!(
+        db.journal_since(u64::MAX),
+        Err(StateError::InvalidValue { field: "time" })
+    );
+}
+
+#[test]
 fn journal_kind_names_are_stable() {
     // Stored in user databases: renaming a kind would break old journals.
     let names: Vec<&str> = JournalKind::ALL.iter().map(|k| k.name()).collect();
@@ -306,7 +332,10 @@ fn journal_kind_names_are_stable() {
             "moved-remote",
             "moved-local",
             "conflict-copy",
-            "folder-created"
+            "folder-created",
+            "overwritten-remote",
+            "overwritten-local",
+            "mass-change-confirmed"
         ]
     );
     for k in JournalKind::ALL {

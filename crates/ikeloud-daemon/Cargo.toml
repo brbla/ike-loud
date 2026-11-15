@@ -11,3 +11,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+ikeloud-safety = { path = "../ikeloud-safety" }
+ikeloud-sync = { path = "../ikeloud-sync" }
+ikeloud-local = { path = "../ikeloud-local" }
+ikeloud-state = { path = "../ikeloud-state" }
+ikeloud-hash = { path = "../ikeloud-hash" }

@@ -1,0 +1,22 @@
+# ike loud sync daemon as a systemd user service (native packages).
+# Install to ~/.config/systemd/user/ or /usr/lib/systemd/user/.
+[Unit]
+Description=ike loud: iCloud Drive sync
+Documentation=https://github.com/brbla/ike-loud
+
+[Service]
+ExecStart=%h/.local/bin/ikeloud-daemon
+Restart=on-failure
+# No core dumps: after a crash, nothing from the sign-in (SRP secrets,
+# session tokens) may end up on disk (docs/rozhodnuti/0013, 0016). The
+# daemon cannot do this itself: prctl/setrlimit need unsafe code, which the
+# workspace forbids.
+LimitCORE=0
+# Sync touches the home folder only.
+ProtectSystem=strict
+ReadWritePaths=%h
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

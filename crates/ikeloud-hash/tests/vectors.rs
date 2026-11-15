@@ -3,7 +3,9 @@
 
 #![allow(clippy::expect_used)] // test code may panic
 
-use ikeloud_hash::{hex, pbkdf2_sha256, sha256, sha256_reader};
+use std::io::Read;
+
+use ikeloud_hash::{HashingReader, hex, pbkdf2_sha256, sha256, sha256_reader};
 
 #[test]
 fn sha256_vectors() {
@@ -47,4 +49,16 @@ fn pbkdf2_vector() {
         hex(&pbkdf2_sha256(b"passwd", b"salt", 1)),
         "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc"
     );
+}
+
+#[test]
+fn a_hashing_reader_hashes_what_passes_through() {
+    let data: Vec<u8> = (0..100_000u32)
+        .map(|i| u8::try_from(i % 7).expect("small"))
+        .collect();
+    let mut reader = HashingReader::new(data.as_slice());
+    let mut copy = Vec::new();
+    reader.read_to_end(&mut copy).expect("read");
+    assert_eq!(copy, data);
+    assert_eq!(reader.finish(), sha256(&[&data]));
 }

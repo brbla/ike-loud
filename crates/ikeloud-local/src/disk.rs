@@ -68,6 +68,11 @@ impl LocalDisk {
         }
     }
 
+    /// The synced folder.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     fn abs(&self, path: &RelPath) -> PathBuf {
         self.root.join(path.as_str())
     }
@@ -88,6 +93,23 @@ impl LocalDisk {
         let hash = ikeloud_hash::sha256_reader(&mut File::open(self.abs(path))?)?;
         if ContentHash::new(ikeloud_hash::hex(&hash)) == expected.hash {
             Ok(())
+        } else {
+            Err(DiskError::Changed)
+        }
+    }
+
+    /// Opens the file at `path` for reading (an upload), if it is still the
+    /// file `id`. The identity is checked on the opened file itself, so a
+    /// file swapped in between the check and the open cannot be read.
+    pub fn open(&self, path: &RelPath, id: LocalId) -> Result<File, DiskError> {
+        let file = match File::open(self.abs(path)) {
+            Ok(f) => f,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(DiskError::Changed),
+            Err(e) => return Err(e.into()),
+        };
+        let meta = file.metadata()?;
+        if meta.file_type().is_file() && local_id(&meta) == id {
+            Ok(file)
         } else {
             Err(DiskError::Changed)
         }

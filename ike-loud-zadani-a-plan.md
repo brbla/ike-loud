@@ -346,7 +346,7 @@ Do verze 1.0 je to zhruba 8 až 9 měsíců. Pořadí se oproti fázím v zadán
 - Produkční `ikeloud-api`: typované chyby, opakování, omezení rychlosti, pevný seznam domén.
 - Stav v SQLite, stahování do dočasných souborů, obnova po pádu.
 - Démon, D-Bus rozhraní a GUI: průvodce, okno stavu, oznámení, opětovné přihlášení.
-- Démon zakáže ukládání své paměti při pádu (core dump), aby v ní nezůstala tajemství z přihlášení (rozhodnutí 0013).
+- Démon nesmí ukládat svou paměť při pádu (core dump), aby v ní nezůstala tajemství z přihlášení (rozhodnutí 0013); zákaz nastavuje jeho služba (`LimitCORE=0`, rozhodnutí 0016).
 - Flatpak balíček hned, aby sandbox nepřekvapil na konci.
 - Denní kanárek: automatická kontrola proti testovacímu účtu.
 

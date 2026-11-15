@@ -29,9 +29,9 @@ external = ["unicode-normalization"]
 dev = ["ikeloud-testkit"]
 
 [crates.ikeloud-daemon]
-internal = ["ikeloud-api", "ikeloud-sync", "ikeloud-safety"]
+internal = ["ikeloud-api", "ikeloud-sync", "ikeloud-safety", "ikeloud-local", "ikeloud-state", "ikeloud-hash"]
 external = []
-dev = []
+dev = ["ikeloud-testkit"]
 
 [crates.ikeloud-gui]
 internal = []

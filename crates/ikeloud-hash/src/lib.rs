@@ -32,6 +32,37 @@ pub fn sha256_reader(reader: &mut impl Read) -> io::Result<[u8; 32]> {
     }
 }
 
+/// A reader that computes the SHA-256 of everything read through it: an
+/// upload hashes exactly the bytes it sends.
+#[derive(Debug)]
+pub struct HashingReader<R> {
+    inner: R,
+    hasher: Sha256,
+}
+
+impl<R: Read> HashingReader<R> {
+    /// Wraps `inner`.
+    pub fn new(inner: R) -> Self {
+        Self {
+            inner,
+            hasher: Sha256::new(),
+        }
+    }
+
+    /// The SHA-256 of what was read so far.
+    pub fn finish(self) -> [u8; 32] {
+        self.hasher.finalize().into()
+    }
+}
+
+impl<R: Read> Read for HashingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.hasher.update(buf.get(..n).unwrap_or_default());
+        Ok(n)
+    }
+}
+
 /// PBKDF2-HMAC-SHA256 with a 32-byte output.
 pub fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; 32] {
     let mut output = [0u8; 32];
