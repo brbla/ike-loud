@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ike loud
+Comment=Sync iCloud Drive with a folder on this computer
+Comment[cs]=Synchronizace iCloud Drive se složkou v počítači
+Exec=ikeloud-gui --hidden
+Icon=io.github.brbla.IkeLoud
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-phase=2

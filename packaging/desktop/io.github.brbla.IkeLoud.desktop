@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=ike loud
+GenericName=iCloud Drive
+GenericName[cs]=iCloud Drive
+Comment=Sync iCloud Drive with a folder on this computer
+Comment[cs]=Synchronizace iCloud Drive se složkou v počítači
+Exec=ikeloud-gui
+Icon=io.github.brbla.IkeLoud
+Terminal=false
+Categories=Network;FileTransfer;
+Keywords=iCloud;Apple;sync;cloud;
+StartupNotify=true

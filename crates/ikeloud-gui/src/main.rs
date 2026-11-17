@@ -36,19 +36,23 @@ use crate::tray::{MenuItem, Tray, TrayAction};
 type SharedClient = Arc<Mutex<Option<Client<HttpsTransport>>>>;
 
 fn main() -> glib::ExitCode {
+    // `--hidden` (autostart after login): only the tray icon, no window.
+    let hidden = std::env::args().skip(1).any(|a| a == "--hidden");
     let app = gtk::Application::builder().application_id(APP_ID).build();
-    app.connect_activate(|app| {
+    app.connect_activate(move |app| {
         // A second start only shows the window of the first.
         if let Some(window) = app.active_window() {
             window.present();
             return;
         }
         match Paths::from_env() {
-            Ok(paths) => App::start(app, paths),
+            Ok(paths) => App::start(app, paths, hidden),
             Err(_) => app.quit(),
         }
     });
-    app.run()
+    // GTK must not see our own option.
+    let program: Vec<String> = std::env::args().take(1).collect();
+    app.run_with_args(&program)
 }
 
 /// Widgets of the status page.
@@ -166,7 +170,7 @@ struct App {
 }
 
 impl App {
-    fn start(app: &gtk::Application, paths: Paths) {
+    fn start(app: &gtk::Application, paths: Paths, hidden: bool) {
         let texts = Translations::new(&languages_from_env()).ok();
         let text = |key: &'static str| match &texts {
             Some(t) => t.text(&Message::new(key)),
@@ -179,6 +183,7 @@ impl App {
             .unwrap_or(Path::new("/tmp"))
             .join("icons");
         let icons_ready = icons::install(&icon_dir).is_ok();
+        let _ = icons::install_app_icon(&glib::user_data_dir());
         if icons_ready && let Some(display) = gtk::gdk::Display::default() {
             gtk::IconTheme::for_display(&display).add_search_path(&icon_dir);
         }
@@ -326,7 +331,12 @@ impl App {
             }
             None => glib::ControlFlow::Break,
         });
-        this.window.present();
+        // Hidden only when there is a tray icon to come back through, and
+        // nothing waits for the user (setup, sign-in).
+        let needs_user = this.status_view.borrow().is_none();
+        if !hidden || this.tray.borrow().is_none() || needs_user {
+            this.window.present();
+        }
         // Every handler holds only a weak reference; this is the one strong
         // reference, kept by the application until it shuts down. Without it
         // the app state was freed right after start and no button reacted.

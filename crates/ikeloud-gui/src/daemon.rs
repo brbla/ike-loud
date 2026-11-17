@@ -1,28 +1,52 @@
-//! Starting and stopping the daemon process.
+//! Starting and stopping the daemon.
 //!
-//! For now the app starts the daemon itself; a systemd user service (and the
-//! Background portal in Flatpak) comes with packaging. Stopping is safe at
-//! any moment: the daemon writes its state transactionally and downloads go
-//! to temporary files first (decisions 0009, 0015, 0017).
+//! Installed (`scripts/install-user.sh`): the daemon is the systemd user
+//! service `ikeloud.service`, and the app starts and stops it with
+//! `systemctl --user`. The service runs without the app, with core dumps
+//! off (decision 0016). From a build tree without the service: the app
+//! starts the daemon as its child.
+//!
+//! Stopping is safe at any moment: the daemon writes its state
+//! transactionally and downloads go to temporary files first (decisions
+//! 0009, 0015, 0017).
 
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Stdio};
 
 use ikeloud_config::Status;
 
 /// Exit code of the daemon when the sign-in expired.
 pub const EXIT_SIGNED_OUT: i32 = 3;
 
+/// Name of the systemd user service.
+const SERVICE: &str = "ikeloud.service";
+
 /// The daemon as the app sees it.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DaemonProcess {
+    /// The systemd user service is installed.
+    service: bool,
     child: Option<Child>,
+}
+
+impl Default for DaemonProcess {
+    fn default() -> Self {
+        Self {
+            service: service_installed(),
+            child: None,
+        }
+    }
 }
 
 impl DaemonProcess {
     /// Starts the daemon unless one is running already (also one started by
-    /// an earlier run of the app).
+    /// an earlier run of the app, or the service).
     pub fn start(&mut self, status: Option<&Status>) -> std::io::Result<()> {
+        if self.service {
+            // Also restarts a service that exited "signed out" or "not set
+            // up" (no automatic restart for those).
+            return systemctl(&["start", SERVICE]);
+        }
         if self.running(status) {
             return Ok(());
         }
@@ -32,6 +56,10 @@ impl DaemonProcess {
 
     /// Stops the daemon.
     pub fn stop(&mut self, status: Option<&Status>) {
+        if self.service {
+            let _ = systemctl(&["stop", SERVICE]);
+            return;
+        }
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -54,7 +82,8 @@ impl DaemonProcess {
         self.child.is_some() || status.is_some_and(|s| is_daemon(s.pid))
     }
 
-    /// If our daemon ended since the last call: how.
+    /// If the daemon ended since the last call: how. For the service, only
+    /// "signed out" is reported (from its last exit code), once.
     pub fn exited(&mut self) -> Option<ExitStatus> {
         let child = self.child.as_mut()?;
         match child.try_wait() {
@@ -64,6 +93,32 @@ impl DaemonProcess {
             }
             _ => None,
         }
+    }
+}
+
+/// Whether the systemd user service is installed for this user.
+fn service_installed() -> bool {
+    Command::new("systemctl")
+        .args(["--user", "cat", SERVICE])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+fn systemctl(args: &[&str]) -> std::io::Result<()> {
+    let status = Command::new("systemctl")
+        .arg("--user")
+        .args(args)
+        .stdout(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "systemctl --user {} failed",
+            args.join(" ")
+        )))
     }
 }
 
