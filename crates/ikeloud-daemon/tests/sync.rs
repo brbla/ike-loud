@@ -51,11 +51,26 @@ fn edits_flow_both_ways_and_replaced_versions_are_kept() {
     f.assert_in_sync();
     assert_eq!(f.icloud.content("a.txt"), Some(&b"two (linux)"[..]));
     assert_eq!(f.read("b.txt").as_deref(), Some(&b"two (iphone)"[..]));
+    // Both replaced versions are kept: the old local b.txt (replaced by the
+    // download), and the server's a.txt (read before the upload replaced it
+    // on iCloud; spec: before every overwrite, locally and on the server).
     let history = f.files("history");
-    assert_eq!(history.len(), 1, "{history:?}");
-    assert!(
-        history[0].ends_with("/b.txt"),
-        "the old local b.txt is kept"
+    assert_eq!(history.len(), 2, "{history:?}");
+    let kept = |name: &str| {
+        history
+            .iter()
+            .find(|p| p.ends_with(&format!("/{name}")))
+            .map(|p| std::fs::read(f.dir.join("history").join(p)).expect("readable"))
+    };
+    assert_eq!(
+        kept("b.txt").as_deref(),
+        Some(&b"one"[..]),
+        "old local b.txt"
+    );
+    assert_eq!(
+        kept("a.txt").as_deref(),
+        Some(&b"one"[..]),
+        "old server a.txt"
     );
     let kinds: Vec<JournalKind> =
         f.db.journal(10)

@@ -153,4 +153,10 @@ gui-local-pending =
     }
 gui-back = Back
 gui-apply = Apply
-gui-read-only = Read-only for now: nothing is ever written to iCloud.
+gui-upload-toggle = Upload changes to iCloud (beta)
+gui-upload-description = On: what you change in the folder is uploaded to iCloud. Every write checks that iCloud still holds the version ike loud knows; deletions go to iCloud's Recently Deleted. Off: ike loud only downloads.
+gui-upload-confirm = ike loud will upload new and changed files, and move deleted ones to Recently Deleted on iCloud. Uploading is new: keep a copy of anything you cannot lose. It starts after the first download is complete.
+gui-upload-turn-on = Turn On Uploads
+gui-two-way = Two-way: changes in the folder are uploaded to iCloud.
+gui-upload-waiting = Uploads are on; they start once the first download is complete.
+gui-read-only = Read-only: nothing is written to iCloud. Uploads can be turned on in Settings.

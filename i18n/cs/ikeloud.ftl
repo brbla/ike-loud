@@ -158,4 +158,10 @@ gui-local-pending =
     }
 gui-back = Zpět
 gui-apply = Použít
-gui-read-only = Zatím jen čtení: na iCloud se nikdy nic nezapíše.
+gui-upload-toggle = Nahrávat změny na iCloud (zkušební)
+gui-upload-description = Zapnuté: co ve složce změníte, nahraje se na iCloud. Každý zápis ověří, že na iCloudu je stále verze, kterou ike loud zná; smazané jde na iCloudu do Nedávno smazaných. Vypnuté: ike loud jen stahuje.
+gui-upload-confirm = ike loud bude nahrávat nové a změněné soubory a smazané přesouvat na iCloudu do Nedávno smazaných. Nahrávání je nové: co nesmíte ztratit, mějte i jinde. Začne po dokončení prvního stažení.
+gui-upload-turn-on = Zapnout nahrávání
+gui-two-way = Oběma směry: změny ve složce se nahrávají na iCloud.
+gui-upload-waiting = Nahrávání je zapnuté; začne po dokončení prvního stažení.
+gui-read-only = Jen čtení: na iCloud se nic nezapisuje. Nahrávání zapnete v nastavení.

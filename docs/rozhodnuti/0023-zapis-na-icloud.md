@@ -46,3 +46,19 @@ Další zjištění:
 - **Zápis je volitelný** (nastavení „Nahrávat na iCloud“, výchozí
   vypnuto), dokud nepadne brána milníku 3: 14 dní běhu, beta. Bez něj a
   do dokončení prvního stažení běží démon jen pro čtení.
+
+## Ověřeno naostro (17. 11. 2026, testovací účet)
+
+Démon s volbou „Nahrávat na iCloud“ v podsložce `ikeloud-obousmerne`:
+nový soubor nahrán (i se složkou); úprava nahrána jako nová verze téhož
+dokumentu a předchozí verze ze serveru uložena v lokální historii;
+přejmenování přeneseno jako přejmenování; soubor přidaný na iCloudu
+stažen; smazání na Linuxu přesunuto do koše iCloudu; úprava na obou
+stranách zároveň: na iCloudu zůstala jeho verze a linuxová je vedle jako
+„… (konflikt Linux 2026-11-17).txt“, nahraná i na iCloud.
+
+Známá mezera: prázdné složky se po smazání nepřenášejí (ani jedním
+směrem); zůstanou prázdné. Obsah to neohrožuje.
+
+Režim démona se rozhoduje po každém běhu: do dokončení prvního stažení
+(značka `first-download-done` ve složce stavu) a bez volby jen čtení.

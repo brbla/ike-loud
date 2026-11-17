@@ -89,11 +89,20 @@ fn main() -> ExitCode {
             None => path.sibling(&format!("{} (conflict {today} {n})", path.name())),
         }
     };
+    // Writes only after the first download is complete, and only when the
+    // user turned uploads on (decision 0023). Decided again after every run.
+    let first_done = paths.state_db.with_file_name("first-download-done");
+    let mode = Cell::new(sync_mode(
+        Settings::load(&paths.settings)
+            .map(|s| s.upload)
+            .unwrap_or(false),
+        first_done.exists(),
+    ));
     let setup = ikeloud_daemon::SyncSetup {
         disk: LocalDisk::new(folder.clone(), paths.trash.clone(), paths.history.clone()),
         settle_time: DEFAULT_SETTLE_TIME,
         conflict_name: &conflict_name,
-        mode: Mode::ReadOnly(ReadOnlyReason::FirstDownload),
+        mode: &mode,
     };
 
     let (events, receive) = mpsc::channel();
@@ -116,20 +125,54 @@ fn main() -> ExitCode {
     };
     let mut daemon = Daemon::new(setup, db, watches, Timing::DEFAULT);
     let status_path = paths.status.clone();
+    let settings_path = paths.settings.clone();
     let mut on_status = |status: Status| {
         let (state, detail) = describe(&status);
         if let Ok(RunOutcome::Ran(report)) = &status.outcome {
             pending.set(u64::try_from(report.deferred.len()).unwrap_or(u64::MAX));
+            if first_download_complete(report) && !first_done.exists() {
+                let _ = write_private(&first_done, b"1\n");
+            }
         }
+        mode.set(sync_mode(
+            Settings::load(&settings_path)
+                .map(|s| s.upload)
+                .unwrap_or(false),
+            first_done.exists(),
+        ));
         let (files, downloaded) = counts.get();
         let mut file = FileStatus::now(state, detail, files, downloaded);
         file.local_pending = pending.get();
+        file.writes = mode.get() == Mode::Full;
         let _ = file.save(&status_path);
     };
     // The loop ends when every event sender is gone; the watcher keeps one.
     let _keep = events;
     daemon.run(&mut remote, &receive, &mut on_status);
     ExitCode::SUCCESS
+}
+
+/// Two-way only after the first download and with uploads turned on.
+fn sync_mode(upload: bool, first_download_done: bool) -> Mode {
+    if !first_download_done {
+        Mode::ReadOnly(ReadOnlyReason::FirstDownload)
+    } else if !upload {
+        Mode::ReadOnly(ReadOnlyReason::Settings)
+    } else {
+        Mode::Full
+    }
+}
+
+/// The first download is complete when a run had nothing left to do from
+/// the server's side: it stopped for nothing, carried out nothing (the
+/// earlier runs did), and skipped no download. Deferred actions are the
+/// uploads read-only mode holds back.
+fn first_download_complete(report: &ikeloud_daemon::RunReport) -> bool {
+    report.executed.stopped.is_none()
+        && report.executed.done.is_empty()
+        && report.executed.skipped.is_empty()
+        && report.executed.not_attempted.is_empty()
+        && report.busy.is_empty()
 }
 
 /// What a finished run means for the user.

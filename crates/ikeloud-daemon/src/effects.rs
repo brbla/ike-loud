@@ -47,6 +47,22 @@ impl RunEffects<'_> {
         remote_path: RelPath,
         id: LocalId,
     ) -> Result<Option<Transfer>, EffectError> {
+        // Replacing a version on the server: keep that version in the local
+        // history first, and only if it is still the planned one.
+        if let Action::Upload {
+            expected_etag: Some(expected),
+            remote,
+            ..
+        } = action.action()
+        {
+            let mut previous = self.remote.download(remote)?;
+            if &previous.etag != expected {
+                return Err(EffectError::Changed);
+            }
+            self.disk
+                .keep_remote_version(remote, &mut previous.content, self.now)
+                .map_err(disk_error)?;
+        }
         let file = self.disk.open(path, id).map_err(disk_error)?;
         let mut reader = HashingReader::new(file);
         let written = self

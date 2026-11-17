@@ -360,7 +360,10 @@ fn layout(s: &Shared) -> Variant {
         .menu
         .iter()
         .zip(1i32..)
-        .map(|(item, id)| Variant::from_variant(&node(id, entry_props(item), Vec::new())))
+        // `av`: a Vec<Variant> boxes each element once by itself; boxing
+        // here too made each child a variant in a variant, which Plasma
+        // (Qt) does not unpack: an empty menu.
+        .map(|(item, id)| node(id, entry_props(item), Vec::new()))
         .collect();
     let mut root = HashMap::new();
     root.insert("children-display".to_string(), "submenu".to_variant());
@@ -461,4 +464,65 @@ fn argb(pixbuf: &gtk::gdk_pixbuf::Pixbuf) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shared(menu: Vec<MenuItem>) -> Shared {
+        Shared {
+            badge: Badge::Idle,
+            title: "ike loud".to_string(),
+            tooltip: String::new(),
+            menu,
+            revision: 7,
+            theme_path: "/x".to_string(),
+            pixmaps: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn layout_children_are_boxed_once() {
+        let s = shared(vec![
+            MenuItem::Entry {
+                label: "Show".to_string(),
+                action: TrayAction::Show,
+            },
+            MenuItem::Separator,
+        ]);
+        let layout = layout(&s);
+        assert_eq!(layout.type_().as_str(), "(u(ia{sv}av))");
+        let root = layout.child_value(1);
+        let children = root.child_value(2);
+        assert_eq!(children.n_children(), 2);
+        // Each child: a variant holding the item itself, not another variant.
+        let first = children.child_value(0).as_variant().expect("boxed");
+        assert_eq!(first.type_().as_str(), "(ia{sv}av)");
+        assert_eq!(first.child_value(0).get::<i32>(), Some(1));
+        let props = first.child_value(1);
+        let props: HashMap<String, Variant> = props.get().expect("a{sv}");
+        let label = props.get("label").and_then(|v| v.get::<String>());
+        assert_eq!(label.as_deref(), Some("Show"));
+        let second = children.child_value(1).as_variant().expect("boxed");
+        let props: HashMap<String, Variant> = second.child_value(1).get().expect("a{sv}");
+        let kind = props.get("type").and_then(|v| v.get::<String>());
+        assert_eq!(kind.as_deref(), Some("separator"));
+    }
+
+    #[test]
+    fn group_properties_and_events() {
+        let s = shared(vec![MenuItem::Entry {
+            label: "Quit".to_string(),
+            action: TrayAction::Quit,
+        }]);
+        let none: Rc<dyn Fn(TrayAction)> = Rc::new(|_| {});
+        let params = (vec![1i32, 9], Vec::<String>::new()).to_variant();
+        let reply = menu_call(&s, "GetGroupProperties", &params, &none).expect("reply");
+        assert_eq!(reply.type_().as_str(), "(a(ia{sv}))");
+        // Unknown id 9 is left out.
+        assert_eq!(reply.child_value(0).n_children(), 1);
+        let reply = menu_call(&s, "AboutToShow", &(1i32,).to_variant(), &none).expect("reply");
+        assert_eq!(reply.type_().as_str(), "(b)");
+    }
 }

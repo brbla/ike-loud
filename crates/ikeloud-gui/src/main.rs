@@ -56,6 +56,8 @@ struct StatusView {
     title: gtk::Label,
     detail: gtk::Label,
     pause: gtk::Button,
+    /// Read-only or two-way, as the daemon runs now.
+    note: gtk::Label,
 }
 
 /// A page of the window.
@@ -738,8 +740,10 @@ impl App {
                     return;
                 }
                 let saved = std::fs::create_dir_all(&folder).and_then(|()| {
+                    // Only the folder changes; other settings stay.
                     Settings {
                         folder: Some(folder.clone()),
+                        ..Settings::load(&this.paths.settings).unwrap_or_default()
                     }
                     .save(&this.paths.settings)
                 });
@@ -930,6 +934,7 @@ impl App {
             title,
             detail,
             pause,
+            note,
         });
         self.shown.set(None);
         self.nav.replace(self.page_with("ike loud", &content, true));
@@ -984,6 +989,66 @@ impl App {
         account_line.append(&account_label);
         account_line.append(&sign_out);
         content.append(&Self::field(&self.t("gui-account"), &account_line));
+
+        // Uploads: off by default while writing is in beta (decision 0023).
+        let upload = gtk::Switch::builder()
+            .active(
+                Settings::load(&self.paths.settings)
+                    .map(|s| s.upload)
+                    .unwrap_or(false),
+            )
+            .valign(gtk::Align::Center)
+            .build();
+        upload.update_property(&[gtk::accessible::Property::Label(
+            &self.t("gui-upload-toggle"),
+        )]);
+        let upload_label = gtk::Label::builder()
+            .label(self.t("gui-upload-toggle"))
+            .xalign(0.0)
+            .hexpand(true)
+            .wrap(true)
+            .build();
+        let upload_line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        upload_line.append(&upload_label);
+        upload_line.append(&upload);
+        let upload_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        upload_box.append(&upload_line);
+        upload_box.append(
+            &gtk::Label::builder()
+                .label(self.t("gui-upload-description"))
+                .wrap(true)
+                .xalign(0.0)
+                .css_classes(["dim-label"])
+                .build(),
+        );
+        content.append(&upload_box);
+        let this = Rc::downgrade(self);
+        upload.connect_state_set(move |switch, on| {
+            let Some(this) = this.upgrade() else {
+                return glib::Propagation::Stop;
+            };
+            if !on {
+                this.set_upload(false);
+                switch.set_state(false);
+                return glib::Propagation::Stop;
+            }
+            // Turning uploads on is asked once more, with what it means.
+            let switch = switch.clone();
+            this.confirm(
+                &this.t("gui-upload-toggle"),
+                &this.t("gui-upload-confirm"),
+                &[("on", "gui-upload-turn-on", false)],
+                move |this, answer| {
+                    let on = answer == "on";
+                    if on {
+                        this.set_upload(true);
+                    }
+                    switch.set_state(on);
+                    switch.set_active(on);
+                },
+            );
+            glib::Propagation::Stop
+        });
 
         let this = Rc::downgrade(self);
         let apply_typed = {
@@ -1103,6 +1168,7 @@ impl App {
         let saved = std::fs::create_dir_all(folder).and_then(|()| {
             Settings {
                 folder: Some(folder.to_path_buf()),
+                ..Settings::load(&self.paths.settings).unwrap_or_default()
             }
             .save(&self.paths.settings)
         });
@@ -1130,6 +1196,19 @@ impl App {
         }
         self.toast(&note);
         resume(self);
+    }
+
+    /// Saves the upload setting; the daemon reads it after its next run.
+    fn set_upload(&self, upload: bool) {
+        let saved = Settings {
+            upload,
+            ..Settings::load(&self.paths.settings).unwrap_or_default()
+        }
+        .save(&self.paths.settings);
+        if let Err(e) = saved {
+            self.toast(&e.to_string());
+        }
+        self.shown.set(None);
     }
 
     fn start_daemon(&self) {
@@ -1240,7 +1319,17 @@ impl App {
             tray.update(badge, &title);
             tray.set_menu(self.menu());
         }
-        let key = (badge, format!("{title}\n{detail}"));
+        let upload_on = Settings::load(&self.paths.settings)
+            .map(|s| s.upload)
+            .unwrap_or(false);
+        let note = if status.as_ref().is_some_and(|s| s.writes) {
+            "gui-two-way"
+        } else if upload_on {
+            "gui-upload-waiting"
+        } else {
+            "gui-read-only"
+        };
+        let key = (badge, format!("{title}\n{detail}\n{note}"));
         let previous = self.shown.replace(Some(key.clone()));
         if previous.as_ref() == Some(&key) {
             return;
@@ -1255,6 +1344,7 @@ impl App {
             view.detail.set_visible(!detail.is_empty());
             view.pause
                 .set_label(&self.t(if paused { "gui-resume" } else { "gui-pause" }));
+            view.note.set_label(&self.t(note));
         }
         if state == Some(State::SignedOut) && self.status_view.borrow().is_some() {
             *self.status_view.borrow_mut() = None;
