@@ -62,3 +62,14 @@ směrem); zůstanou prázdné. Obsah to neohrožuje.
 
 Režim démona se rozhoduje po každém běhu: do dokončení prvního stažení
 (značka `first-download-done` ve složce stavu) a bez volby jen čtení.
+
+## Brána milníku 2: milion scénářů
+
+`SIM_SEEDS=1000000 cargo test --release -p ikeloud-sync --test simulation`
+(17. 11. 2026, 65 min): první běh našel chybu (seed 108965: stažení
+podle cesty přepsalo soubor dokumentem, který na cestu mezitím na
+iCloudu přesunul uživatel; stará verze šla do historie). Oprava: akce
+`Download` nese očekávaný etag. Druhý běh: ve všech třech variantách
+(etag se při přejmenování mění / nemění / bez časů vzniku) milion
+scénářů bez porušení invariantů; 995–996 tisíc se sejde, zbytek bezpečně
+zastaví bezpečnostní vrstva.
