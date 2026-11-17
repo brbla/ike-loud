@@ -8,7 +8,7 @@ use ikeloud_keyring::Keyring;
 #[test]
 #[ignore = "needs a desktop session with a Secret Service"]
 fn store_load_replace_delete() {
-    let keyring = Keyring::open_kind("test").expect("Secret Service");
+    let keyring = Keyring::open_kind("test", "/test-profile").expect("Secret Service");
     keyring.delete().unwrap();
     assert_eq!(keyring.load().unwrap(), None);
     keyring.store(b"{\"a\":1}").unwrap();
@@ -29,7 +29,8 @@ fn a_session_file_moves_into_the_keyring() {
     use ikeloud_keyring::SessionStore;
     let dir = std::env::temp_dir().join(format!("ikeloud-keyring-{}", std::process::id()));
     let paths = ikeloud_config::Paths::new(&dir.join("c"), &dir.join("s"), &dir.join("d"));
-    let keyring = Keyring::open_kind("test-store").expect("Secret Service");
+    let keyring =
+        Keyring::open_kind("test-store", &paths.session.to_string_lossy()).expect("Secret Service");
     keyring.delete().unwrap();
 
     // A file from before the keyring: loaded, moved into the keyring.
@@ -53,4 +54,20 @@ fn a_session_file_moves_into_the_keyring() {
     again.delete();
     assert_eq!(keyring.load().unwrap(), None);
     std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+#[ignore = "needs a desktop session with a Secret Service"]
+fn an_item_without_a_profile_is_taken_over() {
+    // Stored by the first keyring release (no profile attribute).
+    let old = Keyring::open_kind("test-legacy", "").expect("Secret Service");
+    let mine = Keyring::open_kind("test-legacy", "/my-profile").expect("Secret Service");
+    mine.delete().unwrap();
+    old.delete().unwrap();
+    old.store_without_profile_for_tests(b"legacy").unwrap();
+    assert_eq!(mine.load().unwrap().as_deref(), Some(&b"legacy"[..]));
+    // Now under the profile; the old item is gone.
+    assert_eq!(mine.load().unwrap().as_deref(), Some(&b"legacy"[..]));
+    mine.delete().unwrap();
+    assert_eq!(mine.load().unwrap(), None, "nothing left to take over");
 }

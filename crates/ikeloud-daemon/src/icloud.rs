@@ -56,6 +56,9 @@ impl<T: Transport> ICloudRemote<T> {
     }
 }
 
+/// Folders listed per request.
+const LIST_BATCH: usize = 25;
+
 /// A folder's ids and version.
 #[derive(Debug, Clone)]
 struct Folder {
@@ -235,41 +238,48 @@ impl<T: Transport> Remote for ICloudRemote<T> {
         let mut folders = root_only();
         let mut queue: VecDeque<(String, Option<RelPath>)> = VecDeque::new();
         queue.push_back((ROOT.to_string(), None));
-        while let Some((id, path)) = queue.pop_front() {
-            let folder = self.client.list_folder(&id);
+        while !queue.is_empty() {
+            // Up to LIST_BATCH folders per request: one request per folder
+            // made a tree of hundreds of folders take many minutes to list.
+            let batch: Vec<(String, Option<RelPath>)> =
+                queue.drain(..queue.len().min(LIST_BATCH)).collect();
+            let ids: Vec<String> = batch.iter().map(|(id, _)| id.clone()).collect();
+            let listed = self.client.list_folders(&ids);
             self.saved();
-            let folder = folder.map_err(|e| stop_reason(&e))?;
-            for item in folder.items {
-                if item.kind == Kind::Other {
-                    // App libraries (Pages, Numbers…) are not part of the
-                    // synced Drive folder.
-                    continue;
-                }
-                let item_path =
-                    child(path.as_ref(), &item.name).ok_or(StopReason::UnknownResponse)?;
-                match item.kind {
-                    Kind::Folder => {
-                        folders.insert(
-                            item_path.as_str().to_string(),
-                            Folder {
-                                drivewsid: item.drivewsid.clone(),
-                                docwsid: item.docwsid.clone(),
-                                etag: item.etag.clone(),
-                            },
-                        );
-                        listing.folders.push(item_path.clone());
-                        queue.push_back((item.drivewsid.clone(), Some(item_path)));
+            let listed = listed.map_err(|e| stop_reason(&e))?;
+            for (folder, (_, path)) in listed.into_iter().zip(batch) {
+                for item in folder.items {
+                    if item.kind == Kind::Other {
+                        // App libraries (Pages, Numbers…) are not part of the
+                        // synced Drive folder.
+                        continue;
                     }
-                    Kind::File => {
-                        listing.files.push(RemoteFile {
-                            path: item_path.clone(),
-                            doc_id: DocId::new(item.docwsid.clone()),
-                            etag: Etag::new(item.etag.clone()),
-                            size: item.size.unwrap_or(0),
-                        });
-                        items.insert(item_path, item);
+                    let item_path =
+                        child(path.as_ref(), &item.name).ok_or(StopReason::UnknownResponse)?;
+                    match item.kind {
+                        Kind::Folder => {
+                            folders.insert(
+                                item_path.as_str().to_string(),
+                                Folder {
+                                    drivewsid: item.drivewsid.clone(),
+                                    docwsid: item.docwsid.clone(),
+                                    etag: item.etag.clone(),
+                                },
+                            );
+                            listing.folders.push(item_path.clone());
+                            queue.push_back((item.drivewsid.clone(), Some(item_path)));
+                        }
+                        Kind::File => {
+                            listing.files.push(RemoteFile {
+                                path: item_path.clone(),
+                                doc_id: DocId::new(item.docwsid.clone()),
+                                etag: Etag::new(item.etag.clone()),
+                                size: item.size.unwrap_or(0),
+                            });
+                            items.insert(item_path, item);
+                        }
+                        Kind::Other => {}
                     }
-                    Kind::Other => {}
                 }
             }
         }
