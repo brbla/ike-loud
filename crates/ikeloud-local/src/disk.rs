@@ -279,6 +279,41 @@ impl LocalDisk {
         Ok(purged)
     }
 
+    /// Keeps a version read from the server in the local history, before an
+    /// upload replaces it there (spec: before every overwrite, locally and
+    /// on the server, the previous version is set aside for 30 days). Written
+    /// completely and to disk, or not at all.
+    pub fn keep_remote_version(
+        &self,
+        path: &RelPath,
+        content: &mut dyn std::io::Read,
+        now: SystemTime,
+    ) -> Result<(), DiskError> {
+        let secs = now
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let kept = self
+            .history
+            .join(format!("{secs}-{}", unique()))
+            .join(path.as_str());
+        if let Some(parent) = kept.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let result = (|| {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&kept)?;
+            std::io::copy(content, &mut file)?;
+            file.sync_all()
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&kept);
+        }
+        Ok(result?)
+    }
+
     /// Keeps the current version of `path` in the local history (a hard
     /// link, or a copy across filesystems).
     fn keep_in_history(&self, path: &RelPath, now: SystemTime) -> Result<(), DiskError> {

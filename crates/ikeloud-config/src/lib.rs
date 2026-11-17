@@ -70,6 +70,10 @@ impl Paths {
 pub struct Settings {
     /// The synced folder; `None` until the first setup is done.
     pub folder: Option<PathBuf>,
+    /// Upload local changes to iCloud. Off by default while writing is in
+    /// beta (decision 0023); even on, the daemon only reads until the first
+    /// download is complete.
+    pub upload: bool,
 }
 
 impl Settings {
@@ -85,6 +89,7 @@ impl Settings {
                 .get("folder")
                 .map(PathBuf::from)
                 .filter(|p| p.is_absolute()),
+            upload: map.get("upload").is_some_and(|v| v.trim() == "1"),
         })
     }
 
@@ -102,6 +107,9 @@ impl Settings {
                 ));
             }
             text.push_str(&format!("folder={folder}\n"));
+        }
+        if self.upload {
+            text.push_str("upload=1\n");
         }
         write_private(path, text.as_bytes())
     }
@@ -169,6 +177,8 @@ pub struct Status {
     pub downloaded: u64,
     /// Local changes that are not uploaded (read-only mode defers them).
     pub local_pending: u64,
+    /// The daemon uploads (two-way sync); `false`: it only reads.
+    pub writes: bool,
     /// Seconds since 1970 of the last write of the status.
     pub updated: u64,
     /// Process id of the daemon that wrote it.
@@ -189,6 +199,7 @@ impl Status {
             remote_files,
             downloaded,
             local_pending: 0,
+            writes: false,
             updated: unix_now(),
             pid: std::process::id(),
         }
@@ -197,12 +208,13 @@ impl Status {
     /// Writes the status file.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         let text = format!(
-            "state={}\ndetail={}\nremote_files={}\ndownloaded={}\nlocal_pending={}\nupdated={}\npid={}\n",
+            "state={}\ndetail={}\nremote_files={}\ndownloaded={}\nlocal_pending={}\nwrites={}\nupdated={}\npid={}\n",
             self.state.name(),
             self.detail.replace(['\n', '\r'], " "),
             self.remote_files,
             self.downloaded,
             self.local_pending,
+            u8::from(self.writes),
             self.updated,
             self.pid
         );
@@ -223,6 +235,7 @@ impl Status {
             remote_files: number("remote_files"),
             downloaded: number("downloaded"),
             local_pending: number("local_pending"),
+            writes: number("writes") == 1,
             updated: number("updated"),
             pid: map.get("pid").and_then(|v| v.parse().ok()).unwrap_or(0),
         })
@@ -350,6 +363,7 @@ mod tests {
         assert_eq!(Settings::load(&path).unwrap(), Settings::default());
         let settings = Settings {
             folder: Some(PathBuf::from("/home/u/iCloud Drive")),
+            upload: true,
         };
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), settings);
@@ -363,6 +377,7 @@ mod tests {
         assert_eq!(Settings::load(&path).unwrap().folder, None);
         let bad = Settings {
             folder: Some(PathBuf::from("/a\nb")),
+            upload: false,
         };
         assert!(bad.save(&path).is_err());
         fs::remove_dir_all(dir).unwrap();
@@ -375,6 +390,7 @@ mod tests {
         assert_eq!(Status::load(&path), None);
         let mut status = Status::now(State::Syncing, "two\nlines", 12, 3);
         status.local_pending = 4;
+        status.writes = true;
         status.save(&path).unwrap();
         let read = Status::load(&path).unwrap();
         assert_eq!(read, status);

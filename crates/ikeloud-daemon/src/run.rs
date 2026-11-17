@@ -63,8 +63,9 @@ pub struct SyncSetup<'a> {
     /// `ikeloud_i18n`), `None` if the translation gives no usable name.
     pub conflict_name: &'a dyn Fn(&RelPath, u32) -> Option<RelPath>,
     /// Two-way, or read-only: the safety layer then defers every server
-    /// write (milestone 1, first download, settings).
-    pub mode: Mode,
+    /// write (first download, settings). Read at the start of every run, so
+    /// it can change while the daemon runs.
+    pub mode: &'a std::cell::Cell<Mode>,
 }
 
 /// Runs one sync against `remote`: [`start_run`], then
@@ -164,7 +165,7 @@ pub fn start_run(
         .map(|f| (f.path.clone(), f.etag.clone()))
         .collect();
     context.settle_time = settle_time;
-    context.mode = setup.mode;
+    context.mode = setup.mode.get();
     context.recent = recent_changes(db, now)?;
     context.confirmation = confirmation;
 

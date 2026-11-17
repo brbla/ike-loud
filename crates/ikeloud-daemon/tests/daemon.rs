@@ -101,6 +101,7 @@ impl Running {
         let (seen_tx, runs) = mpsc::channel();
         let (thread_dir, mut remote) = (dir.clone(), icloud.clone());
         let thread = std::thread::spawn(move || {
+            let mode = std::cell::Cell::new(ikeloud_safety::Mode::Full);
             let setup = SyncSetup {
                 disk: LocalDisk::new(
                     thread_dir.join("root"),
@@ -109,7 +110,7 @@ impl Running {
                 ),
                 settle_time: Duration::from_millis(200),
                 conflict_name: &copy_name,
-                mode: ikeloud_safety::Mode::Full,
+                mode: &mode,
             };
             let timing = Timing {
                 quiet: Duration::from_millis(300),

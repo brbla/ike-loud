@@ -383,6 +383,7 @@ impl World {
             self.icloud.offline_after = Some(self.user.rng.below(3));
             self.stats.outages += 1;
         }
+        let mode = std::cell::Cell::new(ikeloud_safety::Mode::Full);
         let setup = SyncSetup {
             disk: LocalDisk::new(
                 self.dir.join("root"),
@@ -391,7 +392,7 @@ impl World {
             ),
             settle_time: DEFAULT_SETTLE_TIME,
             conflict_name: &copy_name,
-            mode: ikeloud_safety::Mode::Full,
+            mode: &mode,
         };
         let now = SystemTime::now() + Duration::from_secs(60);
         let mut server = Server {
