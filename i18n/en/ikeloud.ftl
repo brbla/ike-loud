@@ -168,4 +168,23 @@ gui-kind-trash-local = to the trash on this computer
 gui-kind-overwrite-local = new version on this computer (the old one to history)
 gui-kind-move-remote = move on iCloud
 gui-kind-move-local = move on this computer
+gui-journal = Journal
+gui-journal-empty = Nothing has happened yet.
+gui-journal-uploaded = Uploaded
+gui-journal-downloaded = Downloaded
+gui-journal-trashed-remote = Deleted on iCloud (Recently Deleted)
+gui-journal-trashed-local = Deleted on this computer (trash)
+gui-journal-moved-remote = Moved on iCloud
+gui-journal-moved-local = Moved on this computer
+gui-journal-conflict-copy = Conflict copy
+gui-journal-folder-created = Folder created on iCloud
+gui-journal-overwritten-remote = New version on iCloud
+gui-journal-overwritten-local = New version on this computer (the old one in history)
+gui-journal-mass-change-confirmed = Mass change confirmed
+gui-notify-conflict-title = ike loud: both versions kept
+gui-notify-conflict =
+    { $count ->
+        [one] { $name }: the file changed here and elsewhere. iCloud keeps its version; this computer's is next to it as a conflict copy.
+       *[other] { $count } files changed here and elsewhere, e.g. { $name }. iCloud keeps its versions; this computer's are next to them as conflict copies.
+    }
 gui-read-only = Read-only: nothing is written to iCloud. Uploads can be turned on in Settings.

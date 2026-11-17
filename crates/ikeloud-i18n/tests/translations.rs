@@ -137,6 +137,20 @@ fn all_messages() -> Vec<Message> {
         "gui-state-offline-detail",
         "gui-state-paused-detail",
         "gui-read-only",
+        "gui-journal",
+        "gui-journal-empty",
+        "gui-journal-uploaded",
+        "gui-journal-downloaded",
+        "gui-journal-trashed-remote",
+        "gui-journal-trashed-local",
+        "gui-journal-moved-remote",
+        "gui-journal-moved-local",
+        "gui-journal-conflict-copy",
+        "gui-journal-folder-created",
+        "gui-journal-overwritten-remote",
+        "gui-journal-overwritten-local",
+        "gui-journal-mass-change-confirmed",
+        "gui-notify-conflict-title",
         "gui-confirm-changes",
         "gui-confirm-sent",
         "gui-kind-trash-remote",
@@ -175,6 +189,11 @@ fn all_messages() -> Vec<Message> {
             .push(Message::new("gui-folder-will-be-emptied").arg("count", Value::Number(count)));
         messages.push(Message::new("gui-local-pending").arg("count", Value::Number(count)));
         messages.push(Message::new("gui-more-changes").arg("count", Value::Number(count)));
+        messages.push(
+            Message::new("gui-notify-conflict")
+                .arg("name", Value::Text("a.txt".into()))
+                .arg("count", Value::Number(count)),
+        );
     }
     messages.push(Message::new("gui-folder-trash-failed").arg("detail", Value::Text("x".into())));
     messages.push(Message::new("gui-change-body").arg("folder", Value::Text("/x".into())));

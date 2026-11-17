@@ -173,4 +173,24 @@ gui-kind-trash-local = v počítači do koše
 gui-kind-overwrite-local = nová verze v počítači (stará do historie)
 gui-kind-move-remote = přesun na iCloudu
 gui-kind-move-local = přesun v počítači
+gui-journal = Deník
+gui-journal-empty = Zatím se nic nestalo.
+gui-journal-uploaded = Nahráno
+gui-journal-downloaded = Staženo
+gui-journal-trashed-remote = Smazáno na iCloudu (Nedávno smazané)
+gui-journal-trashed-local = Smazáno v počítači (koš)
+gui-journal-moved-remote = Přesunuto na iCloudu
+gui-journal-moved-local = Přesunuto v počítači
+gui-journal-conflict-copy = Konfliktní kopie
+gui-journal-folder-created = Složka vytvořena na iCloudu
+gui-journal-overwritten-remote = Nová verze na iCloudu
+gui-journal-overwritten-local = Nová verze v počítači (stará v historii)
+gui-journal-mass-change-confirmed = Potvrzena hromadná změna
+gui-notify-conflict-title = ike loud: zachovány obě verze
+gui-notify-conflict =
+    { $count ->
+        [one] { $name }: soubor se změnil tady i jinde. Na iCloudu zůstala jeho verze, ta z počítače je vedle jako konfliktní kopie.
+        [few] { $count } soubory se změnily tady i jinde, např. { $name }. Na iCloudu zůstaly jejich verze, ty z počítače jsou vedle jako konfliktní kopie.
+       *[other] { $count } souborů se změnilo tady i jinde, např. { $name }. Na iCloudu zůstaly jejich verze, ty z počítače jsou vedle jako konfliktní kopie.
+    }
 gui-read-only = Jen čtení: na iCloud se nic nezapisuje. Nahrávání zapnete v nastavení.

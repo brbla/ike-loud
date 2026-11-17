@@ -24,8 +24,8 @@ use gtk::{gio, glib};
 
 use ikeloud_api::{ApiError, Client, HttpsTransport, SavedSession, SignIn, TrustedPhone};
 use ikeloud_config::{
-    FolderProblem, Paths, PendingChanges, Request, Settings, State, Status, check_folder,
-    protected_folder, write_private,
+    FolderProblem, JournalLine, Paths, PendingChanges, Request, Settings, State, Status,
+    check_folder, load_journal, protected_folder, write_private,
 };
 use ikeloud_i18n::{Message, Translations, Value, languages_from_env};
 
@@ -84,6 +84,7 @@ struct Nav {
     title: gtk::Label,
     back: gtk::Button,
     settings: gtk::Button,
+    journal: gtk::Button,
     history: RefCell<Vec<(String, String, bool)>>,
     next: Cell<u32>,
 }
@@ -139,6 +140,7 @@ impl Nav {
         if let Some((_, title, settings)) = history.last() {
             self.title.set_label(title);
             self.settings.set_visible(*settings);
+            self.journal.set_visible(*settings);
         }
         self.back.set_visible(history.len() > 1);
     }
@@ -166,6 +168,10 @@ struct App {
     tray: RefCell<Option<Tray>>,
     status_view: RefCell<Option<StatusView>>,
     shown: Cell<Option<(Badge, String)>>,
+    /// The state a notification was sent for (no repeat while it lasts).
+    notified: Cell<Option<State>>,
+    /// Newest conflict copy already told about (journal time).
+    conflicts_seen: Cell<u64>,
     _hold: gio::ApplicationHoldGuard,
 }
 
@@ -211,8 +217,15 @@ impl App {
             .tooltip_text(text("gui-settings"))
             .visible(false)
             .build();
+        let journal = gtk::Button::builder()
+            .icon_name("document-open-recent-symbolic")
+            .tooltip_text(text("gui-journal"))
+            .visible(false)
+            .build();
+        journal.update_property(&[gtk::accessible::Property::Label(&text("gui-journal"))]);
         header.pack_start(&back);
         header.pack_end(&settings);
+        header.pack_end(&journal);
         window.set_titlebar(Some(&header));
 
         let stack = gtk::Stack::builder()
@@ -244,6 +257,7 @@ impl App {
             title,
             back: back.clone(),
             settings: settings.clone(),
+            journal: journal.clone(),
             history: RefCell::new(Vec::new()),
             next: Cell::new(0),
         };
@@ -251,6 +265,7 @@ impl App {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_default();
+        let paths_journal = paths.journal.clone();
         let this = Rc::new(Self {
             app: app.clone(),
             window,
@@ -266,6 +281,8 @@ impl App {
             tray: RefCell::new(None),
             status_view: RefCell::new(None),
             shown: Cell::new(None),
+            notified: Cell::new(None),
+            conflicts_seen: Cell::new(newest_conflict(&load_journal(&paths_journal))),
             _hold: app.hold(),
         });
 
@@ -281,6 +298,21 @@ impl App {
                 this.nav.push(this.settings_page());
             }
         });
+        let weak = Rc::downgrade(&this);
+        journal.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.nav.push(this.journal_page());
+            }
+        });
+        // A click on a notification shows the window.
+        let show = gio::SimpleAction::new("show", None);
+        let weak = Rc::downgrade(&this);
+        show.connect_activate(move |_, _| {
+            if let Some(this) = weak.upgrade() {
+                this.window.present();
+            }
+        });
+        app.add_action(&show);
 
         if icons_ready {
             let weak = Rc::downgrade(&this);
@@ -1284,6 +1316,123 @@ impl App {
         lines.join("\n")
     }
 
+    /// Notifications only when the user is needed (spec): a mass change to
+    /// confirm, an expired sign-in, an error, a new conflict copy. Each once.
+    fn notify(&self, state: Option<State>, detail: &str) {
+        let wanted = match state {
+            Some(s @ (State::NeedsConfirmation | State::SignedOut | State::Error)) => Some(s),
+            _ => None,
+        };
+        if wanted != self.notified.get() {
+            self.app.withdraw_notification("state");
+            if let Some(state) = wanted {
+                let title = match state {
+                    State::NeedsConfirmation => self.t("gui-state-needs-confirmation"),
+                    State::SignedOut => self.t("gui-state-signed-out"),
+                    _ => self.t("gui-state-error"),
+                };
+                let n = gio::Notification::new(&format!("ike loud: {title}"));
+                n.set_body(Some(detail));
+                n.set_priority(gio::NotificationPriority::High);
+                n.set_default_action("app.show");
+                self.app.send_notification(Some("state"), &n);
+            }
+            self.notified.set(wanted);
+        }
+        let journal = load_journal(&self.paths.journal);
+        let newest = newest_conflict(&journal);
+        if newest > self.conflicts_seen.get() {
+            let fresh: Vec<&JournalLine> = journal
+                .iter()
+                .filter(|l| l.kind == "conflict-copy" && l.time > self.conflicts_seen.get())
+                .collect();
+            if let Some(first) = fresh.first() {
+                let n = gio::Notification::new(&self.t("gui-notify-conflict-title"));
+                n.set_body(Some(
+                    &self.message(
+                        &Message::new("gui-notify-conflict")
+                            .arg(
+                                "name",
+                                Value::Text(
+                                    first.target.clone().unwrap_or_else(|| first.path.clone()),
+                                ),
+                            )
+                            .arg(
+                                "count",
+                                Value::Number(u64::try_from(fresh.len()).unwrap_or(u64::MAX)),
+                            ),
+                    ),
+                ));
+                n.set_default_action("app.show");
+                self.app.send_notification(Some("conflict"), &n);
+            }
+            self.conflicts_seen.set(newest);
+        }
+    }
+
+    /// The latest changes the daemon carried out, newest first.
+    fn journal_page(self: &Rc<Self>) -> Page {
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let lines = load_journal(&self.paths.journal);
+        if lines.is_empty() {
+            content.append(
+                &gtk::Label::builder()
+                    .label(self.t("gui-journal-empty"))
+                    .css_classes(["dim-label"])
+                    .build(),
+            );
+        }
+        for line in &lines {
+            let when = glib::DateTime::from_unix_local(i64::try_from(line.time).unwrap_or(0))
+                .and_then(|t| t.format("%e. %-m. %H:%M"))
+                .map(|t| t.to_string())
+                .unwrap_or_default();
+            let what = self.journal_kind(&line.kind);
+            let file = match &line.target {
+                Some(target) => format!("{} → {target}", line.path),
+                None => line.path.clone(),
+            };
+            let row = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            row.append(
+                &gtk::Label::builder()
+                    .label(format!("{when} · {what}"))
+                    .xalign(0.0)
+                    .css_classes(["dim-label", "caption"])
+                    .build(),
+            );
+            row.append(
+                &gtk::Label::builder()
+                    .label(file)
+                    .xalign(0.0)
+                    .wrap(true)
+                    .wrap_mode(gtk::pango::WrapMode::WordChar)
+                    .selectable(true)
+                    .build(),
+            );
+            row.set_margin_bottom(6);
+            content.append(&row);
+        }
+        self.page(&self.t("gui-journal"), &content)
+    }
+
+    fn journal_kind(&self, kind: &str) -> String {
+        let key = match kind {
+            "uploaded" => "gui-journal-uploaded",
+            "downloaded" => "gui-journal-downloaded",
+            "trashed-remote" => "gui-journal-trashed-remote",
+            "trashed-local" => "gui-journal-trashed-local",
+            "moved-remote" => "gui-journal-moved-remote",
+            "moved-local" => "gui-journal-moved-local",
+            "conflict-copy" => "gui-journal-conflict-copy",
+            "folder-created" => "gui-journal-folder-created",
+            "overwritten-remote" => "gui-journal-overwritten-remote",
+            "overwritten-local" => "gui-journal-overwritten-local",
+            "mass-change-confirmed" => "gui-journal-mass-change-confirmed",
+            _ => return kind.to_string(),
+        };
+        self.t(key)
+    }
+
     /// Saves the upload setting; the daemon reads it after its next run.
     fn set_upload(&self, upload: bool) {
         let saved = Settings {
@@ -1429,6 +1578,7 @@ impl App {
         let paused = self.paused.get();
         let badge = Badge::for_state(state, paused);
         let (title, detail) = self.describe(state, status.as_ref(), paused);
+        self.notify(state, &detail);
 
         if let Some(tray) = self.tray.borrow().as_ref() {
             tray.update(badge, &title);
@@ -1573,4 +1723,14 @@ fn folder_from_text(text: &str) -> PathBuf {
         }
         _ => PathBuf::from(text),
     }
+}
+
+/// Time of the newest conflict copy in the journal (0: none).
+fn newest_conflict(journal: &[JournalLine]) -> u64 {
+    journal
+        .iter()
+        .filter(|l| l.kind == "conflict-copy")
+        .map(|l| l.time)
+        .max()
+        .unwrap_or(0)
 }
