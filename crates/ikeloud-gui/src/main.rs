@@ -1662,7 +1662,11 @@ impl App {
                 self.t("gui-state-syncing"),
                 self.message(
                     &Message::new("gui-state-syncing-detail")
-                        .arg("downloaded", Value::Number(downloaded)),
+                        .arg("downloaded", Value::Number(downloaded))
+                        .arg(
+                            "uploaded",
+                            Value::Number(status.map(|s| s.uploaded).unwrap_or(0)),
+                        ),
                 ),
             ),
             Some(State::NeedsConfirmation) => {

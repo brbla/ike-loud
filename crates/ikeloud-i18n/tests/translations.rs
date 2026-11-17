@@ -204,7 +204,11 @@ fn all_messages() -> Vec<Message> {
             .arg("files", Value::Number(3))
             .arg("downloaded", Value::Number(2)),
     );
-    messages.push(Message::new("gui-state-syncing-detail").arg("downloaded", Value::Number(2)));
+    messages.push(
+        Message::new("gui-state-syncing-detail")
+            .arg("downloaded", Value::Number(2))
+            .arg("uploaded", Value::Number(3)),
+    );
     messages
 }
 
