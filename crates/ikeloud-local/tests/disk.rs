@@ -293,3 +293,40 @@ fn old_versions_leave_the_history_after_30_days() {
         Purged::default()
     );
 }
+
+#[test]
+fn a_download_of_the_same_content_leaves_the_file_alone() {
+    // iCloud gives a renamed file a new version; the engine then downloads
+    // it again over the local file with the same content.
+    let w = World::new("same");
+    w.write("photo.jpg", b"pixels");
+    let before = w.version("photo.jpg");
+    let (id, hash) = w
+        .disk
+        .write(
+            &p("photo.jpg"),
+            &mut &b"pixels"[..],
+            Some(&before),
+            SystemTime::now(),
+        )
+        .expect("write");
+    assert_eq!(id, before.id, "the same file, not a new inode");
+    assert_eq!(hash, before.hash);
+    assert!(w.files_in("history").is_empty(), "nothing to keep");
+    assert!(
+        w.files_in("root").iter().all(|f| !f.contains(".part")),
+        "no temporary file left"
+    );
+
+    // Another content still replaces it, keeping the old one.
+    w.disk
+        .write(
+            &p("photo.jpg"),
+            &mut &b"other pixels"[..],
+            Some(&before),
+            SystemTime::now(),
+        )
+        .expect("write");
+    assert_eq!(w.read("photo.jpg").as_deref(), Some(&b"other pixels"[..]));
+    assert_eq!(w.files_in("history").len(), 1);
+}

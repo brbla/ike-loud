@@ -184,8 +184,9 @@ impl LocalDisk {
 
     /// Writes `content` to `path` (a download). With `replaces`, the file
     /// there must still be that version, which is first kept in the local
-    /// history; without it, `path` must be free. Returns the identity and
-    /// content hash of the new file.
+    /// history; without it, `path` must be free. A download with the very
+    /// content of the file it replaces leaves that file alone. Returns the
+    /// identity and content hash of the file.
     pub fn write(
         &self,
         path: &RelPath,
@@ -223,6 +224,14 @@ impl LocalDisk {
         match replaces {
             None => {
                 move_no_replace(temp, target)?;
+            }
+            Some(old) if old.hash.as_str() == ikeloud_hash::hex(&hash) => {
+                // The same content (e.g. iCloud changed the version of a
+                // file it only renamed): the file stays as it is, with no
+                // copy in history and no new inode.
+                self.check_version(path, old)?;
+                fs::remove_file(temp)?;
+                return Ok((old.id, old.hash.clone()));
             }
             Some(old) => {
                 self.check_version(path, old)?;
