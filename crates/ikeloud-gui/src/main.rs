@@ -166,6 +166,13 @@ impl App {
             None => glib::ControlFlow::Break,
         });
         this.window.present();
+        // Every handler holds only a weak reference; this is the one strong
+        // reference, kept by the application until it shuts down. Without it
+        // the app state was freed right after start and no button reacted.
+        let keep = Rc::clone(&this);
+        app.connect_shutdown(move |_| {
+            let _ = &keep;
+        });
     }
 
     fn t(&self, key: &'static str) -> String {
