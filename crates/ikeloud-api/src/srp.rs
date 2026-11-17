@@ -157,7 +157,7 @@ impl SrpClient {
     /// New client with a random secret (32 bytes like rclone and pysrp).
     pub fn new(padding: Padding) -> Result<Self, SrpError> {
         let mut secret = [0u8; 32];
-        getrandom::fill(&mut secret).map_err(|_| SrpError::RandomUnavailable)?;
+        getrandom::getrandom(&mut secret).map_err(|_| SrpError::RandomUnavailable)?;
         Self::with_secret(&secret, padding)
     }
 

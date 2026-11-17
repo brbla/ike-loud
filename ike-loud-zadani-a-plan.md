@@ -405,11 +405,11 @@ Cizí kód se volá jen přes vlastní obal s testy smlouvy. Aktualizace knihove
 ## První týden
 
 - [x] Rozhodnout tři otázky z úvodu.
-- [ ] Založit testovací Apple účet s dvoufázovým ověřením a zjistit, zda na něm půjde zapnout ADP.
-- [ ] Založit repozitář, Cargo workspace a CI.
-- [ ] Zaznamenat v prohlížeči přihlášení a práci s Drive na icloud.com a porovnat s kódem rclone a pyicloud.
-- [ ] První průchod v Rustu: přihlášení a výpis kořenové složky.
-- [ ] Kostra TLA+ modelu se třemi stavy.
+- [x] Založit testovací Apple účet s dvoufázovým ověřením (16. 11.). ADP zatím nezapnuté; zkusí se samostatně.
+- [x] Založit repozitář, Cargo workspace a CI.
+- [x] Projít přihlášení a práci s Drive proti skutečnému účtu a porovnat s rclone a pyicloud (rozhodnutí 0021).
+- [x] První průchod v Rustu: přihlášení, SMS, výpis a stažení (`ikeloud-cli`, rozhodnutí 0021).
+- [x] Kostra TLA+ modelu se třemi stavy.
 
 ## Zdroje
 

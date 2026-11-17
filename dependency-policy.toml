@@ -18,8 +18,10 @@ dev = []
 
 [crates.ikeloud-api]
 internal = ["ikeloud-safety", "ikeloud-hash"]
-# SRP-6a: big numbers and the random client secret (src/srp.rs)
-external = ["num-bigint", "getrandom"]
+# SRP-6a: big numbers and the random client secret (src/srp.rs).
+# ureq: HTTPS to the iCloud web services over rustls with compiled-in root
+# certificates; serde, serde_json: their JSON bodies (decision 0021).
+external = ["num-bigint", "getrandom", "ureq", "serde", "serde_json"]
 dev = []
 
 [crates.ikeloud-sync]
