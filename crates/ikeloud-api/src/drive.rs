@@ -103,6 +103,25 @@ struct RawFolder {
 struct DownloadInfo {
     data_token: Option<Token>,
     package_token: Option<Token>,
+    /// The document's version now (`X::Y`), not the listing's.
+    double_etag: Option<String>,
+}
+
+/// A file opened for reading.
+pub struct Opened {
+    /// The version being read, as the server says now; `None` when the
+    /// server did not say (then the caller cannot tell it from the listing).
+    pub etag: Option<String>,
+    /// The content; fails when shorter or longer than the listing says.
+    pub content: Box<dyn Read + Send>,
+}
+
+impl std::fmt::Debug for Opened {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Opened")
+            .field("etag", &self.etag)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Deserialize)]
@@ -168,7 +187,7 @@ impl<T: Transport> Client<T> {
     /// [`std::io::ErrorKind::UnexpectedEof`] or [`std::io::ErrorKind::InvalidData`]
     /// when the content is shorter or longer than the listing says, so a
     /// broken transfer never looks like a complete file.
-    pub fn open_download(&mut self, item: &Item) -> Result<Box<dyn Read + Send>, ApiError> {
+    pub fn open_download(&mut self, item: &Item) -> Result<Opened, ApiError> {
         let account = self.account().ok_or(ApiError::NotSignedIn)?.clone();
         let url = format!(
             "{}/ws/com.apple.CloudDocs/download/by_id?document_id={}&dsid={}",
@@ -183,19 +202,23 @@ impl<T: Transport> Client<T> {
                 what: "no data token".to_string(),
             })?;
         let response = self.web_stream(&token.url)?;
-        Ok(match item.size {
+        let content: Box<dyn Read + Send> = match item.size {
             Some(size) => Box::new(Exact {
                 inner: response.body,
                 left: size,
             }),
             None => response.body,
+        };
+        Ok(Opened {
+            etag: info.double_etag,
+            content,
         })
     }
 
     /// Downloads a file into `out`; returns the number of bytes written.
     pub fn download(&mut self, item: &Item, out: &mut dyn Write) -> Result<u64, ApiError> {
-        let mut content = self.open_download(item)?;
-        std::io::copy(&mut content, out).map_err(|e| match e.kind() {
+        let mut opened = self.open_download(item)?;
+        std::io::copy(&mut opened.content, out).map_err(|e| match e.kind() {
             ErrorKind::UnexpectedEof | ErrorKind::InvalidData => ApiError::Malformed {
                 call: "download",
                 what: e.to_string(),

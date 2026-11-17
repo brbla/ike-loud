@@ -81,11 +81,17 @@ impl RunEffects<'_> {
             }
             Action::Download {
                 remote,
+                expected_etag,
                 local,
                 replaces,
                 ..
             } => {
                 let mut download = self.remote.download(&remote)?;
+                // Another version, or another document moved to this path
+                // since the plan: write nothing, the next run plans again.
+                if download.etag != expected_etag {
+                    return Err(EffectError::Changed);
+                }
                 let (id, hash) = self
                     .disk
                     .write(&local, &mut download.content, replaces.as_ref(), self.now)

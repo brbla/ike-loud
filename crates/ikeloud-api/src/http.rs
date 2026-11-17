@@ -21,16 +21,63 @@ pub enum Method {
 }
 
 /// One request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Request {
+#[derive(Debug)]
+pub struct Request<'a> {
     /// Method.
     pub method: Method,
     /// Full `https://` URL.
     pub url: String,
     /// Headers in the order they are sent.
     pub headers: Vec<(String, String)>,
-    /// Body; `None` sends none.
-    pub body: Option<Vec<u8>>,
+    /// Body.
+    pub body: Body<'a>,
+}
+
+/// Body of a request.
+pub enum Body<'a> {
+    /// No body.
+    Empty,
+    /// Small body in memory (JSON).
+    Bytes(Vec<u8>),
+    /// File content: read while sending, `len` bytes exactly (sent as
+    /// `Content-Length`), so an upload need not fit in memory.
+    Stream {
+        /// The content.
+        reader: &'a mut dyn Read,
+        /// Its length.
+        len: u64,
+    },
+}
+
+impl std::fmt::Debug for Body<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "Empty"),
+            Self::Bytes(b) => write!(f, "Bytes({} B)", b.len()),
+            Self::Stream { len, .. } => write!(f, "Stream({len} B)"),
+        }
+    }
+}
+
+impl Body<'_> {
+    /// The whole body in memory (for tests and the fake server).
+    pub fn into_bytes(self) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::Empty => Ok(Vec::new()),
+            Self::Bytes(b) => Ok(b),
+            Self::Stream { reader, len } => {
+                let mut out = Vec::new();
+                reader.read_to_end(&mut out)?;
+                if u64::try_from(out.len()).unwrap_or(u64::MAX) != len {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "stream length differs from the declared one",
+                    ));
+                }
+                Ok(out)
+            }
+        }
+    }
 }
 
 /// One response. The body is a stream so a download need not fit in memory.
@@ -111,7 +158,7 @@ impl std::error::Error for TransportError {}
 /// Something that sends a request and returns a response.
 pub trait Transport {
     /// Sends the request.
-    fn send(&self, request: Request) -> Result<Response, TransportError>;
+    fn send(&self, request: Request<'_>) -> Result<Response, TransportError>;
 }
 
 /// Hosts the client may talk to: Apple sign-in, the iCloud web services
@@ -175,7 +222,7 @@ impl HttpsTransport {
 }
 
 impl Transport for HttpsTransport {
-    fn send(&self, request: Request) -> Result<Response, TransportError> {
+    fn send(&self, request: Request<'_>) -> Result<Response, TransportError> {
         match https_host(&request.url) {
             Some(host) if host_allowed(host) => {}
             _ => return Err(TransportError::HostNotAllowed(request.url)),
@@ -192,12 +239,17 @@ impl Transport for HttpsTransport {
             builder = builder.header(name.as_str(), value.as_str());
         }
         let result = match request.body {
-            Some(body) => builder
+            Body::Bytes(body) => builder
                 .body(body)
                 .map_err(|e| TransportError::Io(e.to_string()))
                 .and_then(|r| self.agent.run(r).map_err(io_error)),
-            None => builder
+            Body::Empty => builder
                 .body(())
+                .map_err(|e| TransportError::Io(e.to_string()))
+                .and_then(|r| self.agent.run(r).map_err(io_error)),
+            Body::Stream { reader, len } => builder
+                .header("Content-Length", len.to_string())
+                .body(ureq::SendBody::from_reader(reader))
                 .map_err(|e| TransportError::Io(e.to_string()))
                 .and_then(|r| self.agent.run(r).map_err(io_error)),
         }?;

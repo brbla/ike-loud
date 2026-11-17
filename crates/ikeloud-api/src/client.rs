@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 use crate::b64;
 use crate::cookies::CookieJar;
-use crate::http::{Method, Request, Response, Transport, TransportError, https_host};
+use crate::http::{Body, Method, Request, Response, Transport, TransportError, https_host};
 use crate::srp::{self, Padding, Protocol, SrpClient, SrpError};
 
 const AUTH: &str = "https://idmsa.apple.com/appleauth/auth";
@@ -58,6 +58,20 @@ pub enum ApiError {
     DriveUnavailable,
     /// Not signed in to iCloud yet.
     NotSignedIn,
+    /// A write found the name taken on the server; nothing was written
+    /// (a rename may have landed under another name: see `Client::rename`).
+    NameTaken,
+    /// A write found another version on the server than it was meant for;
+    /// nothing was written.
+    VersionChanged,
+    /// The server refused a write with a status the client does not know;
+    /// nothing was written as far as the server says.
+    Rejected {
+        /// Which call.
+        call: &'static str,
+        /// The server's status text.
+        status: String,
+    },
     /// Unexpected status. The body is not included (it may carry personal data).
     Status {
         /// Which call.
@@ -90,6 +104,9 @@ impl std::fmt::Display for ApiError {
             }
             Self::DriveUnavailable => write!(f, "iCloud Drive is not available for this account"),
             Self::NotSignedIn => write!(f, "not signed in"),
+            Self::NameTaken => write!(f, "the name is taken on iCloud"),
+            Self::VersionChanged => write!(f, "the item changed on iCloud"),
+            Self::Rejected { call, status } => write!(f, "{call}: refused ({status})"),
             Self::Status { call, status } => write!(f, "{call}: unexpected status {status}"),
             Self::Malformed { call, what } => write!(f, "{call}: unexpected response: {what}"),
         }
@@ -515,8 +532,23 @@ impl<T: Transport> Client<T> {
         &mut self,
         method: Method,
         url: &str,
-        mut headers: Vec<(String, String)>,
+        headers: Vec<(String, String)>,
         body: Option<Value>,
+    ) -> Result<Response, ApiError> {
+        let body = match body {
+            Some(b) => Body::Bytes(b.to_string().into_bytes()),
+            None => Body::Empty,
+        };
+        self.send_body(method, url, headers, body)
+    }
+
+    /// Sends any body, with the session cookies for the host.
+    pub(crate) fn send_body(
+        &mut self,
+        method: Method,
+        url: &str,
+        mut headers: Vec<(String, String)>,
+        body: Body<'_>,
     ) -> Result<Response, ApiError> {
         let host = https_host(url)
             .ok_or_else(|| TransportError::HostNotAllowed(url.to_string()))?
@@ -528,7 +560,6 @@ impl<T: Transport> Client<T> {
         if let Some(cookie) = self.state.cookies.header(&host, path) {
             headers.push(("Cookie".to_string(), cookie));
         }
-        let body = body.map(|b| b.to_string().into_bytes());
         let response = self.transport.send(Request {
             method,
             url: url.to_string(),
@@ -594,7 +625,7 @@ impl<T: Transport> Client<T> {
     }
 }
 
-fn web_headers() -> Vec<(String, String)> {
+pub(crate) fn web_headers() -> Vec<(String, String)> {
     [
         ("Content-Type", "application/json"),
         ("Accept", "application/json"),
@@ -607,7 +638,7 @@ fn web_headers() -> Vec<(String, String)> {
     .collect()
 }
 
-fn parse_json<R: DeserializeOwned>(
+pub(crate) fn parse_json<R: DeserializeOwned>(
     response: &mut Response,
     call: &'static str,
 ) -> Result<R, ApiError> {
@@ -690,7 +721,7 @@ fn account_from(value: &Value, call: &'static str) -> Result<Account, ApiError> 
     }
 }
 
-fn random_hex(len: usize) -> String {
+pub(crate) fn random_hex(len: usize) -> String {
     let mut bytes = vec![0u8; len];
     // A missing random source only makes the OAuth state guessable, and it
     // is no secret: it ties the requests of one sign-in together.

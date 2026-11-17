@@ -89,6 +89,7 @@ fn trash(path: &str, etag: &str) -> Action {
 fn download(path: &str, overwrites_local: bool) -> Action {
     Action::Download {
         remote: p(path),
+        expected_etag: e("e1"),
         local: p(path),
         size: 10,
         replaces: overwrites_local.then(|| version("h")),
