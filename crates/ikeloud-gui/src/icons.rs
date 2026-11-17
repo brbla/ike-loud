@@ -116,6 +116,21 @@ impl Badge {
     }
 }
 
+/// The app icon: the saxophone without a status badge.
+pub fn app_svg() -> String {
+    let svg = Badge::Quiet.svg();
+    match (svg.find("  <!-- status badge -->"), svg.rfind("</svg>")) {
+        (Some(start), Some(end)) if start < end => {
+            format!(
+                "{}{}",
+                svg.get(..start).unwrap_or_default(),
+                svg.get(end..).unwrap_or_default()
+            )
+        }
+        _ => svg,
+    }
+}
+
 /// Writes all icons under `dir` (flat, and as a hicolor theme, so either
 /// lookup finds them). Returns the folder to give as `IconThemePath`.
 pub fn install(dir: &Path) -> std::io::Result<PathBuf> {
@@ -127,7 +142,9 @@ pub fn install(dir: &Path) -> std::io::Result<PathBuf> {
         std::fs::write(dir.join(&name), &svg)?;
         std::fs::write(themed.join(&name), &svg)?;
     }
-    std::fs::write(themed.join(format!("{APP_ID}.svg")), Badge::Idle.svg())?;
+    // The app icon (window, launchers): the saxophone without a badge.
+    std::fs::write(themed.join(format!("{APP_ID}.svg")), app_svg())?;
+    std::fs::write(dir.join(format!("{APP_ID}.svg")), app_svg())?;
     Ok(dir.to_path_buf())
 }
 

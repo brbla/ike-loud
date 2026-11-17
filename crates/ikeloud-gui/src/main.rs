@@ -5,6 +5,10 @@
 //! saxophone in the tray. The app signs in itself and hands the session to
 //! the daemon through `ikeloud_config::Paths::session`; the password is
 //! never stored.
+//!
+//! Plain GTK 4, no libadwaita: the app follows the desktop's GTK theme
+//! (Breeze on KDE Plasma, Adwaita on GNOME), and the folder dialog is the
+//! desktop's own through the portal (decision 0022).
 
 mod daemon;
 mod icons;
@@ -15,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use adw::prelude::*;
+use gtk::prelude::*;
 use gtk::{gio, glib};
 
 use ikeloud_api::{ApiError, Client, HttpsTransport, SavedSession, SignIn, TrustedPhone};
@@ -31,7 +35,7 @@ use crate::tray::{MenuItem, Tray, TrayAction};
 type SharedClient = Arc<Mutex<Option<Client<HttpsTransport>>>>;
 
 fn main() -> glib::ExitCode {
-    let app = adw::Application::builder().application_id(APP_ID).build();
+    let app = gtk::Application::builder().application_id(APP_ID).build();
     app.connect_activate(|app| {
         // A second start only shows the window of the first.
         if let Some(window) = app.active_window() {
@@ -54,11 +58,92 @@ struct StatusView {
     pause: gtk::Button,
 }
 
+/// A page of the window.
+struct Page {
+    title: String,
+    content: gtk::Widget,
+    /// The page shows the settings button in the header bar.
+    settings: bool,
+}
+
+/// Pages in a stack with a back button: the header bar is shared.
+struct Nav {
+    stack: gtk::Stack,
+    title: gtk::Label,
+    back: gtk::Button,
+    settings: gtk::Button,
+    history: RefCell<Vec<(String, String, bool)>>,
+    next: Cell<u32>,
+}
+
+impl Nav {
+    fn show(&self, page: Page, push: bool) {
+        let name = format!("page{}", self.next.get());
+        self.next.set(self.next.get().wrapping_add(1));
+        self.stack.add_named(&page.content, Some(&name));
+        self.stack.set_visible_child_name(&name);
+        let mut history = self.history.borrow_mut();
+        if !push {
+            for (old, _, _) in history.drain(..) {
+                if let Some(child) = self.stack.child_by_name(&old) {
+                    self.stack.remove(&child);
+                }
+            }
+        }
+        history.push((name, page.title, page.settings));
+        drop(history);
+        self.refresh();
+    }
+
+    /// Replaces all pages with `page`.
+    fn replace(&self, page: Page) {
+        self.show(page, false);
+    }
+
+    /// Shows `page` on top; Back returns.
+    fn push(&self, page: Page) {
+        self.show(page, true);
+    }
+
+    fn pop(&self) {
+        let mut history = self.history.borrow_mut();
+        if history.len() < 2 {
+            return;
+        }
+        if let Some((name, _, _)) = history.pop() {
+            if let Some((below, _, _)) = history.last() {
+                self.stack.set_visible_child_name(below);
+            }
+            if let Some(child) = self.stack.child_by_name(&name) {
+                self.stack.remove(&child);
+            }
+        }
+        drop(history);
+        self.refresh();
+    }
+
+    fn refresh(&self) {
+        let history = self.history.borrow();
+        if let Some((_, title, settings)) = history.last() {
+            self.title.set_label(title);
+            self.settings.set_visible(*settings);
+        }
+        self.back.set_visible(history.len() > 1);
+    }
+}
+
+/// Short messages at the bottom of the window.
+struct Toasts {
+    revealer: gtk::Revealer,
+    label: gtk::Label,
+    serial: Cell<u32>,
+}
+
 struct App {
-    app: adw::Application,
-    window: adw::ApplicationWindow,
-    toasts: adw::ToastOverlay,
-    nav: adw::NavigationView,
+    app: gtk::Application,
+    window: gtk::ApplicationWindow,
+    toasts: Rc<Toasts>,
+    nav: Nav,
     paths: Paths,
     texts: Option<Translations>,
     client: SharedClient,
@@ -73,20 +158,13 @@ struct App {
 }
 
 impl App {
-    fn start(app: &adw::Application, paths: Paths) {
+    fn start(app: &gtk::Application, paths: Paths) {
         let texts = Translations::new(&languages_from_env()).ok();
-        let window = adw::ApplicationWindow::builder()
-            .application(app)
-            .default_width(460)
-            .default_height(560)
-            .title("ike loud")
-            .icon_name(APP_ID)
-            .build();
-        let nav = adw::NavigationView::new();
-        let toasts = adw::ToastOverlay::new();
-        toasts.set_child(Some(&nav));
-        window.set_content(Some(&toasts));
-
+        let text = |key: &'static str| match &texts {
+            Some(t) => t.text(&Message::new(key)),
+            None => key.to_string(),
+        };
+        // Before the window: it looks its icon up when it is built.
         let icon_dir = paths
             .state_db
             .parent()
@@ -96,6 +174,67 @@ impl App {
         if icons_ready && let Some(display) = gtk::gdk::Display::default() {
             gtk::IconTheme::for_display(&display).add_search_path(&icon_dir);
         }
+        let window = gtk::ApplicationWindow::builder()
+            .application(app)
+            .default_width(460)
+            .default_height(520)
+            .title("ike loud")
+            .icon_name(APP_ID)
+            .build();
+
+        let header = gtk::HeaderBar::new();
+        let title = gtk::Label::builder()
+            .label("ike loud")
+            .css_classes(["title"])
+            .build();
+        header.set_title_widget(Some(&title));
+        let back = gtk::Button::builder()
+            .icon_name("go-previous-symbolic")
+            .tooltip_text(text("gui-back"))
+            .visible(false)
+            .build();
+        let settings = gtk::Button::builder()
+            .icon_name("emblem-system-symbolic")
+            .tooltip_text(text("gui-settings"))
+            .visible(false)
+            .build();
+        header.pack_start(&back);
+        header.pack_end(&settings);
+        window.set_titlebar(Some(&header));
+
+        let stack = gtk::Stack::builder()
+            .transition_type(gtk::StackTransitionType::SlideLeftRight)
+            .build();
+        let toast_label = gtk::Label::builder().wrap(true).build();
+        let toast_box = gtk::Box::builder()
+            .accessible_role(gtk::AccessibleRole::Alert)
+            .css_classes(["app-notification"])
+            .margin_bottom(12)
+            .build();
+        toast_box.append(&toast_label);
+        let revealer = gtk::Revealer::builder()
+            .child(&toast_box)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::End)
+            .transition_type(gtk::RevealerTransitionType::SlideUp)
+            .build();
+        let overlay = gtk::Overlay::builder().child(&stack).build();
+        overlay.add_overlay(&revealer);
+        window.set_child(Some(&overlay));
+        let toasts = Rc::new(Toasts {
+            revealer,
+            label: toast_label,
+            serial: Cell::new(0),
+        });
+        let nav = Nav {
+            stack,
+            title,
+            back: back.clone(),
+            settings: settings.clone(),
+            history: RefCell::new(Vec::new()),
+            next: Cell::new(0),
+        };
+
 
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
@@ -116,6 +255,19 @@ impl App {
             status_view: RefCell::new(None),
             shown: Cell::new(None),
             _hold: app.hold(),
+        });
+
+        let weak = Rc::downgrade(&this);
+        back.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.nav.pop();
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        settings.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.nav.push(this.settings_page());
+            }
         });
 
         if icons_ready {
@@ -152,11 +304,11 @@ impl App {
         match (settings.folder, session) {
             (Some(folder), Some(_)) => {
                 *this.folder.borrow_mut() = folder;
-                this.show_status();
                 this.start_daemon();
+                this.show_status();
             }
-            (None, Some(_)) => this.nav.replace(&[this.folder_page()]),
-            (_, None) => this.nav.replace(&[this.signin_page()]),
+            (None, Some(_)) => this.nav.replace(this.folder_page()),
+            (_, None) => this.nav.replace(this.signin_page()),
         }
 
         let weak = Rc::downgrade(&this);
@@ -188,8 +340,21 @@ impl App {
         }
     }
 
+    /// Shows `text` at the bottom of the window for a few seconds.
     fn toast(&self, text: &str) {
-        self.toasts.add_toast(adw::Toast::new(text));
+        let toasts = &self.toasts;
+        toasts.label.set_label(text);
+        toasts.revealer.set_reveal_child(true);
+        let serial = toasts.serial.get().wrapping_add(1);
+        toasts.serial.set(serial);
+        let weak = Rc::downgrade(toasts);
+        glib::timeout_add_seconds_local_once(5, move || {
+            if let Some(toasts) = weak.upgrade()
+                && toasts.serial.get() == serial
+            {
+                toasts.revealer.set_reveal_child(false);
+            }
+        });
     }
 
     fn error_text(&self, error: &ApiError) -> String {
@@ -210,63 +375,76 @@ impl App {
         self.t(key)
     }
 
-    /// A page: header bar, a clamp, and `content` in a vertical box.
-    fn page(&self, title: &str, content: &gtk::Box) -> adw::NavigationPage {
-        self.page_with(title, content, None)
+    /// A page: `content` centered at a readable width, scrolling if needed.
+    fn page(&self, title: &str, content: &gtk::Box) -> Page {
+        self.page_with(title, content, false)
     }
 
-    /// A page with a button at the end of the header bar.
-    fn page_with(
-        &self,
-        title: &str,
-        content: &gtk::Box,
-        header_end: Option<&gtk::Button>,
-    ) -> adw::NavigationPage {
-        let toolbar = adw::ToolbarView::new();
-        let header = adw::HeaderBar::new();
-        if let Some(button) = header_end {
-            header.pack_end(button);
-        }
-        toolbar.add_top_bar(&header);
-        let clamp = adw::Clamp::builder()
-            .maximum_size(420)
-            .child(content)
-            .margin_top(12)
-            .margin_bottom(24)
-            .margin_start(12)
-            .margin_end(12)
-            .build();
+    fn page_with(&self, title: &str, content: &gtk::Box, settings: bool) -> Page {
+        content.set_width_request(360);
+        content.set_halign(gtk::Align::Center);
+        content.set_margin_top(18);
+        content.set_margin_bottom(24);
+        content.set_margin_start(18);
+        content.set_margin_end(18);
         let scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
-            .child(&clamp)
+            .child(content)
             .build();
-        toolbar.set_content(Some(&scroll));
-        adw::NavigationPage::new(&toolbar, title)
+        Page {
+            title: title.to_string(),
+            content: scroll.upcast(),
+            settings,
+        }
+    }
+
+    /// A heading in large bold type (markup works with any GTK theme).
+    fn heading(text: &str, large: bool) -> gtk::Label {
+        let size = if large { "x-large" } else { "large" };
+        let label = gtk::Label::builder()
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .build();
+        label.set_markup(&format!(
+            "<span size='{size}' weight='bold'>{}</span>",
+            glib::markup_escape_text(text)
+        ));
+        label
     }
 
     fn intro(title: &str, text: &str) -> gtk::Box {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 18);
-        let heading = gtk::Label::builder()
-            .label(title)
-            .css_classes(["title-1"])
-            .wrap(true)
-            .build();
         let body = gtk::Label::builder()
             .label(text)
             .wrap(true)
             .justify(gtk::Justification::Center)
             .css_classes(["dim-label"])
             .build();
-        content.append(&heading);
+        content.append(&Self::heading(title, true));
         content.append(&body);
         content
+    }
+
+    /// A labelled field: the label above the widget.
+    fn field(label: &str, widget: &impl IsA<gtk::Widget>) -> gtk::Box {
+        let field = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let caption = gtk::Label::builder().label(label).xalign(0.0).build();
+        caption.set_markup(&format!("<b>{}</b>", glib::markup_escape_text(label)));
+        caption.set_mnemonic_widget(Some(widget));
+        // Screen readers name the field after its label.
+        widget
+            .upcast_ref::<gtk::Widget>()
+            .update_property(&[gtk::accessible::Property::Label(label)]);
+        field.append(&caption);
+        field.append(widget);
+        field
     }
 
     fn action_button(label: &str) -> gtk::Button {
         gtk::Button::builder()
             .label(label)
             .halign(gtk::Align::Center)
-            .css_classes(["suggested-action", "pill"])
+            .css_classes(["suggested-action"])
             .build()
     }
 
@@ -304,22 +482,18 @@ impl App {
         let _ = write_private(&self.paths.session, client.saved().to_json().as_bytes());
     }
 
-    fn signin_page(self: &Rc<Self>) -> adw::NavigationPage {
+    fn signin_page(self: &Rc<Self>) -> Page {
         let content = Self::intro(
             &self.t("gui-signin-title"),
             &self.t("gui-signin-description"),
         );
-        let group = adw::PreferencesGroup::new();
-        let account = adw::EntryRow::builder()
-            .title(self.t("gui-account"))
+        let account = gtk::Entry::builder()
+            .input_purpose(gtk::InputPurpose::Email)
+            .activates_default(false)
             .build();
-        account.set_input_purpose(gtk::InputPurpose::Email);
-        let password = adw::PasswordEntryRow::builder()
-            .title(self.t("gui-password"))
-            .build();
-        group.add(&account);
-        group.add(&password);
-        content.append(&group);
+        let password = gtk::PasswordEntry::builder().show_peek_icon(true).build();
+        content.append(&Self::field(&self.t("gui-account"), &account));
+        content.append(&Self::field(&self.t("gui-password"), &password));
         let button = Self::action_button(&self.t("gui-signin"));
         content.append(&button);
 
@@ -365,7 +539,7 @@ impl App {
                         match result {
                             Ok(Some(phone)) => {
                                 *this.phone.borrow_mut() = Some(phone);
-                                this.nav.push(&this.code_page());
+                                this.nav.push(this.code_page());
                             }
                             Ok(None) => this.signed_in(),
                             Err(e) => this.toast(&this.error_text(&e)),
@@ -377,14 +551,14 @@ impl App {
         let on_enter = {
             let button = button.clone();
             let submit = submit.clone();
-            move |_: &adw::PasswordEntryRow| submit(&button)
+            move |_: &gtk::PasswordEntry| submit(&button)
         };
-        password.connect_entry_activated(on_enter);
+        password.connect_activate(on_enter);
         button.connect_clicked(submit);
         self.page(&self.t("gui-signin-title"), &content)
     }
 
-    fn code_page(self: &Rc<Self>) -> adw::NavigationPage {
+    fn code_page(self: &Rc<Self>) -> Page {
         let phone = self.phone.borrow().clone();
         let ending: String = phone
             .as_ref()
@@ -393,11 +567,11 @@ impl App {
         let description =
             self.message(&Message::new("gui-code-description").arg("phone", Value::Text(ending)));
         let content = Self::intro(&self.t("gui-code-title"), &description);
-        let group = adw::PreferencesGroup::new();
-        let code = adw::EntryRow::builder().title(self.t("gui-code")).build();
-        code.set_input_purpose(gtk::InputPurpose::Digits);
-        group.add(&code);
-        content.append(&group);
+        let code = gtk::Entry::builder()
+            .input_purpose(gtk::InputPurpose::Digits)
+            .max_length(8)
+            .build();
+        content.append(&Self::field(&self.t("gui-code"), &code));
         let verify = Self::action_button(&self.t("gui-verify"));
         let resend = gtk::Button::builder()
             .label(self.t("gui-resend"))
@@ -437,9 +611,9 @@ impl App {
         let on_enter = {
             let verify = verify.clone();
             let submit = submit.clone();
-            move |_: &adw::EntryRow| submit(&verify)
+            move |_: &gtk::Entry| submit(&verify)
         };
-        code.connect_entry_activated(on_enter);
+        code.connect_activate(on_enter);
         verify.connect_clicked(submit);
         let this = Rc::downgrade(self);
         resend.connect_clicked(move |button| {
@@ -473,32 +647,32 @@ impl App {
         match configured {
             Some(folder) => {
                 *self.folder.borrow_mut() = folder;
-                self.show_status();
                 self.start_daemon();
+                self.show_status();
             }
-            None => self.nav.replace(&[self.folder_page()]),
+            None => self.nav.replace(self.folder_page()),
         }
     }
 
-    fn folder_page(self: &Rc<Self>) -> adw::NavigationPage {
+    fn folder_page(self: &Rc<Self>) -> Page {
         let content = Self::intro(
             &self.t("gui-folder-title"),
             &self.t("gui-folder-description"),
         );
-        let group = adw::PreferencesGroup::new();
         // The path can be typed or pasted, or picked in the desktop's own
         // folder dialog (KDE's on Plasma, GNOME's on GNOME, via the portal).
-        let row = adw::EntryRow::builder()
-            .title(self.t("gui-folder"))
+        let row = gtk::Entry::builder()
             .text(self.folder.borrow().to_string_lossy().as_ref())
+            .hexpand(true)
             .build();
         let choose = gtk::Button::builder()
             .label(self.t("gui-folder-choose"))
-            .valign(gtk::Align::Center)
             .build();
-        row.add_suffix(&choose);
-        group.add(&row);
-        content.append(&group);
+        row.update_property(&[gtk::accessible::Property::Label(&self.t("gui-folder"))]);
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        line.append(&row);
+        line.append(&choose);
+        content.append(&Self::field(&self.t("gui-folder"), &line));
         let problem = gtk::Label::builder().wrap(true).visible(false).build();
         content.append(&problem);
         let done = Self::action_button(&self.t("gui-folder-done"));
@@ -572,8 +746,8 @@ impl App {
                 });
                 match saved {
                     Ok(()) => {
-                        this.show_status();
                         this.start_daemon();
+                        this.show_status();
                     }
                     Err(e) => this.toast(&format!("{}: {e}", this.t("gui-folder-error"))),
                 }
@@ -659,7 +833,8 @@ impl App {
     }
 
     /// A question with Cancel and the given answers `(id, text key,
-    /// destructive)`; `on_answer` gets the id (or "cancel").
+    /// destructive)`; `on_answer` gets the id (or "cancel"). The dialog is
+    /// GTK's, drawn in the desktop's GTK theme.
     fn confirm(
         self: &Rc<Self>,
         heading: &str,
@@ -667,25 +842,30 @@ impl App {
         answers: &[(&str, &'static str, bool)],
         on_answer: impl FnOnce(&Rc<Self>, &str) + 'static,
     ) {
-        let dialog = adw::AlertDialog::new(Some(heading), Some(body));
-        dialog.add_response("cancel", &self.t("gui-cancel"));
-        for (id, key, destructive) in answers {
-            dialog.add_response(id, &self.t(key));
-            dialog.set_response_appearance(
-                id,
-                if *destructive {
-                    adw::ResponseAppearance::Destructive
-                } else {
-                    adw::ResponseAppearance::Suggested
-                },
-            );
+        let mut labels = vec![self.t("gui-cancel")];
+        let mut ids = vec!["cancel".to_string()];
+        for (id, key, _) in answers {
+            labels.push(self.t(key));
+            ids.push((*id).to_string());
         }
-        dialog.set_close_response("cancel");
-        dialog.set_default_response(Some("cancel"));
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+        let dialog = gtk::AlertDialog::builder()
+            .message(heading)
+            .detail(body)
+            .modal(true)
+            .cancel_button(0)
+            .default_button(0)
+            .build();
+        dialog.set_buttons(&labels);
         let weak = Rc::downgrade(self);
         dialog.choose(Some(&self.window), gio::Cancellable::NONE, move |answer| {
+            let id = answer
+                .ok()
+                .and_then(|index| usize::try_from(index).ok())
+                .and_then(|index| ids.get(index).cloned())
+                .unwrap_or_else(|| "cancel".to_string());
             if let Some(this) = weak.upgrade() {
-                on_answer(&this, answer.as_str());
+                on_answer(&this, &id);
             }
         });
     }
@@ -702,11 +882,7 @@ impl App {
             .icon_name(Badge::Quiet.icon_name())
             .pixel_size(64)
             .build();
-        let title = gtk::Label::builder()
-            .label(self.t("gui-state-starting"))
-            .wrap(true)
-            .css_classes(["title-2"])
-            .build();
+        let title = Self::heading(&self.t("gui-state-starting"), false);
         let detail = gtk::Label::builder()
             .wrap(true)
             .justify(gtk::Justification::Center)
@@ -721,7 +897,7 @@ impl App {
         let open = Self::action_button(&self.t("gui-open-folder"));
         let pause = gtk::Button::builder()
             .label(self.t("gui-pause"))
-            .css_classes(["pill"])
+            .halign(gtk::Align::Center)
             .build();
         buttons.append(&open);
         buttons.append(&pause);
@@ -738,16 +914,6 @@ impl App {
         content.append(&buttons);
         content.append(&note);
 
-        let settings = gtk::Button::builder()
-            .icon_name("emblem-system-symbolic")
-            .tooltip_text(self.t("gui-settings"))
-            .build();
-        let this = Rc::downgrade(self);
-        settings.connect_clicked(move |_| {
-            if let Some(this) = this.upgrade() {
-                this.nav.push(&this.settings_page());
-            }
-        });
         let this = Rc::downgrade(self);
         open.connect_clicked(move |_| {
             if let Some(this) = this.upgrade() {
@@ -767,60 +933,73 @@ impl App {
             pause,
         });
         self.shown.set(None);
-        self.nav
-            .replace(&[self.page_with("ike loud", &content, Some(&settings))]);
+        self.nav.replace(self.page_with("ike loud", &content, true));
         self.tick();
     }
 
     /// Settings: the synced folder and the account.
-    fn settings_page(self: &Rc<Self>) -> adw::NavigationPage {
+    fn settings_page(self: &Rc<Self>) -> Page {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 24);
 
-        let folder_group = adw::PreferencesGroup::builder()
-            .title(self.t("gui-folder"))
-            .description(self.t("gui-folder-change-description"))
-            .build();
-        let folder_row = adw::EntryRow::builder()
-            .title(self.t("gui-folder"))
+        let folder_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let folder_row = gtk::Entry::builder()
             .text(self.folder.borrow().to_string_lossy().as_ref())
-            .show_apply_button(true)
+            .hexpand(true)
             .build();
+        let apply = gtk::Button::builder().label(self.t("gui-apply")).build();
         let change = gtk::Button::builder()
             .label(self.t("gui-folder-change"))
-            .valign(gtk::Align::Center)
             .build();
-        folder_row.add_suffix(&change);
-        folder_group.add(&folder_row);
-        content.append(&folder_group);
+        folder_row.update_property(&[gtk::accessible::Property::Label(&self.t("gui-folder"))]);
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        line.append(&folder_row);
+        line.append(&apply);
+        line.append(&change);
+        folder_box.append(&Self::field(&self.t("gui-folder"), &line));
+        folder_box.append(
+            &gtk::Label::builder()
+                .label(self.t("gui-folder-change-description"))
+                .wrap(true)
+                .xalign(0.0)
+                .css_classes(["dim-label"])
+                .build(),
+        );
+        content.append(&folder_box);
 
-        let account_group = adw::PreferencesGroup::builder()
-            .title(self.t("gui-account-section"))
-            .build();
         let account = std::fs::read_to_string(&self.paths.session)
             .ok()
             .and_then(|t| SavedSession::from_json(&t))
             .map(|s| s.account_name().to_string())
             .unwrap_or_default();
-        let account_row = adw::ActionRow::builder()
-            .title(self.t("gui-account"))
-            .subtitle(account)
+        let account_label = gtk::Label::builder()
+            .label(account)
+            .xalign(0.0)
+            .hexpand(true)
+            .selectable(true)
             .build();
-        account_row.add_css_class("property");
         let sign_out = gtk::Button::builder()
             .label(self.t("gui-sign-out"))
-            .valign(gtk::Align::Center)
             .css_classes(["destructive-action"])
             .build();
-        account_row.add_suffix(&sign_out);
-        account_group.add(&account_row);
-        content.append(&account_group);
+        let account_line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        account_line.append(&account_label);
+        account_line.append(&sign_out);
+        content.append(&Self::field(&self.t("gui-account"), &account_line));
 
         let this = Rc::downgrade(self);
-        folder_row.connect_apply(move |row| {
-            if let Some(this) = this.upgrade() {
-                this.change_folder(&folder_from_text(&row.text()), row);
+        let apply_typed = {
+            let row = folder_row.clone();
+            move || {
+                if let Some(this) = this.upgrade() {
+                    this.change_folder(&folder_from_text(&row.text()), &row);
+                }
             }
-        });
+        };
+        {
+            let apply_typed = apply_typed.clone();
+            folder_row.connect_activate(move |_| apply_typed());
+        }
+        apply.connect_clicked(move |_| apply_typed());
         let this = Rc::downgrade(self);
         change.connect_clicked(move |_| {
             let Some(this) = this.upgrade() else { return };
@@ -854,7 +1033,7 @@ impl App {
     /// state belongs to the old folder and is dropped: kept, it would take
     /// the files missing in the new folder for deleted ones. Read-only, so
     /// iCloud itself is never touched.
-    fn change_folder(self: &Rc<Self>, folder: &Path, row: &adw::EntryRow) {
+    fn change_folder(self: &Rc<Self>, folder: &Path, row: &gtk::Entry) {
         let old = self.folder.borrow().clone();
         if folder == old.as_path() {
             return;
@@ -905,7 +1084,7 @@ impl App {
         folder: &Path,
         old: &Path,
         trash_old: bool,
-        row: &adw::EntryRow,
+        row: &gtk::Entry,
     ) {
         let status = Status::load(&self.paths.status);
         let was_paused = self.paused.get();
@@ -957,6 +1136,12 @@ impl App {
     fn start_daemon(&self) {
         self.paused.set(false);
         let status = Status::load(&self.paths.status);
+        let running = self.daemon.borrow_mut().running(status.as_ref());
+        if !running {
+            // A status left by an earlier daemon (e.g. "signed out" before
+            // this sign-in) must not be read as the new one's.
+            let _ = Status::now(State::Starting, "", 0, 0).save(&self.paths.status);
+        }
         if let Err(e) = self.daemon.borrow_mut().start(status.as_ref()) {
             self.toast(&e.to_string());
         }
@@ -983,7 +1168,7 @@ impl App {
         }
         *self.status_view.borrow_mut() = None;
         self.paused.set(false);
-        self.nav.replace(&[self.signin_page()]);
+        self.nav.replace(self.signin_page());
         self.tick();
     }
 
@@ -1063,7 +1248,10 @@ impl App {
         }
         if let Some(view) = self.status_view.borrow().as_ref() {
             view.icon.set_icon_name(Some(&badge.icon_name()));
-            view.title.set_label(&title);
+            view.title.set_markup(&format!(
+                "<span size='large' weight='bold'>{}</span>",
+                glib::markup_escape_text(&title)
+            ));
             view.detail.set_label(&detail);
             view.detail.set_visible(!detail.is_empty());
             view.pause
@@ -1071,7 +1259,7 @@ impl App {
         }
         if state == Some(State::SignedOut) && self.status_view.borrow().is_some() {
             *self.status_view.borrow_mut() = None;
-            self.nav.replace(&[self.signin_page()]);
+            self.nav.replace(self.signin_page());
             self.window.present();
         }
     }

@@ -33,7 +33,7 @@ export LC_ALL=C
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Bump when the meaning of the cache changes (layout, cleaning rules).
-SCHEMA=5
+SCHEMA=6
 
 # Names of environment variables that can affect compilation. RING_* and
 # PERL_EXECUTABLE: read by the build script of ring (TLS) without
@@ -62,11 +62,11 @@ platform() {
     echo "ar: $(first_line "${AR:-ar}" --version)"
     echo "ld: $(first_line ld --version)"
     echo "libc: $(first_line ldd --version)"
-    # System libraries the GUI's -sys crates find through pkg-config (GTK,
-    # libadwaita and what they pull in): their versions and flags end up in
+    # System libraries the GUI's -sys crates find through pkg-config (GTK
+    # and what it pulls in): their versions and flags end up in
     # the build scripts' output.
-    echo "gui libs: $(pkg-config --modversion gtk4 libadwaita-1 2>&1 | tr '\n' ' ')"
-    echo "gui flags: $(pkg-config --cflags --libs gtk4 libadwaita-1 2>&1 | tr '\n' ' ')"
+    echo "gui libs: $(pkg-config --modversion gtk4 2>&1 | tr '\n' ' ')"
+    echo "gui flags: $(pkg-config --cflags --libs gtk4 2>&1 | tr '\n' ' ')"
 }
 
 tool_inputs() {

@@ -143,6 +143,8 @@ fn all_messages() -> Vec<Message> {
         "gui-folder-changed",
         "gui-account-section",
         "gui-cancel",
+        "gui-back",
+        "gui-apply",
         "gui-folder-absolute",
         "gui-folder-trash-and-start",
         "gui-folder-protected",

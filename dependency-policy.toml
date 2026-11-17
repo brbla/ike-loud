@@ -38,12 +38,12 @@ external = []
 dev = ["ikeloud-testkit"]
 
 # The app: first-run setup (sign-in, SMS code, folder), status window, tray
-# icon. gtk4 + libadwaita (decision 0022); GLib/GIO through gtk4's re-exports
+# icon. Plain gtk4 (decision 0022); GLib/GIO through gtk4's re-exports
 # (D-Bus for the tray icon). Signs in with ikeloud-api and hands the session
 # to the daemon through the files of ikeloud-config.
 [crates.ikeloud-gui]
 internal = ["ikeloud-api", "ikeloud-config", "ikeloud-i18n"]
-external = ["gtk4", "libadwaita"]
+external = ["gtk4"]
 dev = []
 
 [crates.ikeloud-cli]
