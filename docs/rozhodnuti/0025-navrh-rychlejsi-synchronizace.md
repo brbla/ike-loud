@@ -1,6 +1,6 @@
-# 0025: Rychlejší synchronizace (návrh)
+# 0025: Rychlejší synchronizace
 
-Datum: 2026-11-17 · Stav: **návrh**, čeká na rozhodnutí vlastníka
+Datum: 2026-11-17 · Stav: kroky 1 a 2 přijaty vlastníkem a hotové, krok 3 čeká
 
 ## Co je pomalé (měřeno na testovacím účtu, 1 506 složek, 1 462 souborů)
 
@@ -86,3 +86,21 @@ zjistit, jak `basehash` vzniká (pokus: hash známého souboru).
 1 → 2 → 3. Krok 1 je malý a pomůže hned; krok 2 je nejvíc práce
 (odhadem 1–2 dny včetně pokusů a testů) a přinese nejvíc; krok 3 stojí
 na kroku 2.
+
+## Provedení (17. 11. 2026)
+
+- **Krok 1:** jádro seskupí nezávislé akce (přenosy, složky jedné
+  hloubky) a démon je provede nejvýš čtyřmi vlákny; každý výsledek se
+  zapíše hned. Deník nese čas akce.
+- **Zjištění při nasazení:** iCloud po zhruba 40 rychlých dotazech
+  zpomalí účet na 17–23 s za dotaz. Procházení stromu při každém běhu
+  tak trvalo desítky minut a démon za dvě hodiny nic nenahrál.
+- **Krok 2:** výpis z CloudKitu (`ikeloud-daemon/src/tree.rs`), záložně
+  procházení složek. Porovnání naostro (`ikeloud-daemon
+  --compare-listing`) na testovacím účtu: 337 souborů a 1 506 složek,
+  shodné cesty, ID, etagy i velikosti, žádný rozdíl. Pravidelná kontrola
+  každou minutu místo pěti.
+- **Push:** iCloud Drive na Macu dostává upozornění přes Apple Push, ale
+  `tokens/create` CloudKitu vrací 405 a služba `pushws` z účtu nemá
+  záznam v DNS; linuxové nástroje se všechny dotazují. Zůstává dotaz se
+  sync tokenem každou minutu.

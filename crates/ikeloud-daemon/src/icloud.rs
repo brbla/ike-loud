@@ -5,11 +5,15 @@
 //! write ("name taken", "another version") changes nothing on the server
 //! and is [`RemoteError::Changed`]; the next run plans again.
 //!
-//! Listing walks the whole tree, 25 folders per request. Any failure fails
-//! the whole listing: a partial listing would look like deleted files
-//! (spec: an empty or odd listing is an API error, not deleted content).
-//! The same holds for a name that is not a usable path component: one odd
-//! name stops the run rather than hiding a file.
+//! Listing: from CloudKit's changes of the Drive zone with a sync token
+//! (decision 0025: an unchanged zone costs one request, and iCloud slows
+//! an account down after some 40 quick requests). When the account has no
+//! CloudKit address or the tree from the changes is doubtful
+//! ([`crate::tree`]), the run walks the folders instead, 25 per request.
+//! Any failure fails the whole listing: a partial listing would look like
+//! deleted files (spec: an empty or odd listing is an API error, not
+//! deleted content). The same holds for a name that is not a usable path
+//! component: one odd name stops the run rather than hiding a file.
 //!
 //! Independent transfers may run at once ([`Remote::fork`], decision 0025):
 //! each fork has its own client with the same session and shares the maps
@@ -25,6 +29,7 @@ use ikeloud_safety::{Action, ApprovedAction, Etag, RelPath};
 use ikeloud_sync::{DocId, RemoteFile, StopReason};
 
 use crate::remote::{Download, Listing, Remote, RemoteError, Written};
+use crate::tree::{CloudTree, Unusable};
 
 /// Folders listed per request.
 const LIST_BATCH: usize = 25;
@@ -78,6 +83,8 @@ struct Core<T: Transport> {
 /// The real server.
 pub struct ICloudRemote<T: Transport> {
     core: Core<T>,
+    /// The tree from CloudKit's zone changes.
+    tree: CloudTree,
     /// The session a fork ended with, newer than the main client's.
     latest: Arc<Mutex<Option<SavedSession>>>,
     /// Called whenever the session may have changed (new cookies), to save it.
@@ -113,6 +120,7 @@ impl<T: Transport> ICloudRemote<T> {
             },
             latest: Arc::new(Mutex::new(None)),
             on_session,
+            tree: CloudTree::default(),
         }
     }
 
@@ -379,9 +387,75 @@ fn child(parent: Option<&RelPath>, name: &str) -> Option<RelPath> {
     }
 }
 
-impl<T: Transport + Clone + Send + 'static> Remote for ICloudRemote<T> {
-    fn list(&mut self) -> Result<Listing, StopReason> {
-        self.catch_up();
+/// Why the changes could not give the listing.
+enum NoChanges {
+    /// Stop the run (offline, signed out, …).
+    Stop(StopReason),
+    /// List the folders instead (no CloudKit, a doubtful tree, an error).
+    Walk(Unusable),
+}
+
+impl<T: Transport + Clone + Send + 'static> ICloudRemote<T> {
+    /// The listing from the zone's changes since the last sync token.
+    fn list_from_changes(&mut self) -> Result<Listing, NoChanges> {
+        let has_cloudkit = self
+            .core
+            .client
+            .account()
+            .is_some_and(|a| a.ckdatabasews.is_some());
+        if !has_cloudkit {
+            return Err(NoChanges::Walk(Unusable("no CloudKit address".into())));
+        }
+        if self.tree.wants_full() {
+            self.tree.begin_full();
+        }
+        loop {
+            let page = self.core.client.zone_changes(self.tree.token.as_deref());
+            self.saved();
+            match page {
+                Ok(page) => {
+                    self.tree.apply(page.records);
+                    self.tree.token = Some(page.sync_token);
+                    if !page.more_coming {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    // Busy, offline, signed out: as for any listing. Anything
+                    // else (an expired token, an odd answer): start over.
+                    let reason = stop_reason(&e);
+                    self.tree.reset();
+                    return Err(match reason {
+                        StopReason::Offline | StopReason::SignedOut => NoChanges::Stop(reason),
+                        _ => NoChanges::Walk(Unusable(e.to_string())),
+                    });
+                }
+            }
+        }
+        let built = self.tree.build().map_err(|e| {
+            self.tree.reset();
+            NoChanges::Walk(e)
+        })?;
+        let mut maps = Maps::default();
+        maps.items.extend(built.items);
+        for (path, ids) in built.folders {
+            maps.folders.insert(
+                path,
+                Folder {
+                    drivewsid: ids.drivewsid,
+                    docwsid: ids.docwsid,
+                    etag: ids.etag,
+                },
+            );
+        }
+        *lock(&self.core.maps) = maps;
+        Ok(built.listing)
+    }
+}
+
+impl<T: Transport + Clone + Send + 'static> ICloudRemote<T> {
+    /// The listing by walking the folders, 25 per request.
+    fn list_by_walking(&mut self) -> Result<Listing, StopReason> {
         let mut listing = Listing::default();
         let mut maps = Maps::default();
         let mut queue: VecDeque<(String, Option<RelPath>)> = VecDeque::new();
@@ -433,6 +507,68 @@ impl<T: Transport + Clone + Send + 'static> Remote for ICloudRemote<T> {
         }
         *lock(&self.core.maps) = maps;
         Ok(listing)
+    }
+
+    /// Diagnostics: the listing from CloudKit and by walking the folders,
+    /// compared; the differences, one per line (empty: the same).
+    #[doc(hidden)]
+    pub fn compare_listings(&mut self) -> Result<Vec<String>, StopReason> {
+        self.tree.reset();
+        let from_changes = match self.list_from_changes() {
+            Ok(listing) => listing,
+            Err(NoChanges::Stop(reason)) => return Err(reason),
+            Err(NoChanges::Walk(Unusable(why))) => {
+                return Ok(vec![format!("CloudKit unusable: {why}")]);
+            }
+        };
+        let walked = self.list_by_walking()?;
+        let files = |l: &Listing| -> std::collections::BTreeSet<String> {
+            l.files
+                .iter()
+                .map(|f| {
+                    format!(
+                        "file {} {} {} {}",
+                        f.path.as_str(),
+                        f.doc_id.as_str(),
+                        f.etag.as_str(),
+                        f.size
+                    )
+                })
+                .chain(l.folders.iter().map(|p| format!("folder {}", p.as_str())))
+                .collect()
+        };
+        let (a, b) = (files(&from_changes), files(&walked));
+        let mut out: Vec<String> = a
+            .difference(&b)
+            .map(|x| format!("only CloudKit: {x}"))
+            .collect();
+        out.extend(b.difference(&a).map(|x| format!("only walk:     {x}")));
+        out.push(format!(
+            "CloudKit: {} files, {} folders; walk: {} files, {} folders",
+            from_changes.files.len(),
+            from_changes.folders.len(),
+            walked.files.len(),
+            walked.folders.len()
+        ));
+        Ok(out)
+    }
+}
+
+impl<T: Transport + Clone + Send + 'static> Remote for ICloudRemote<T> {
+    fn list(&mut self) -> Result<Listing, StopReason> {
+        self.catch_up();
+        match self.list_from_changes() {
+            Ok(listing) => return Ok(listing),
+            Err(NoChanges::Stop(reason)) => return Err(reason),
+            Err(NoChanges::Walk(Unusable(why))) => {
+                // For the service's journal (journalctl --user -u ikeloud).
+                #[allow(clippy::print_stderr)]
+                {
+                    eprintln!("listing the folders instead of CloudKit changes: {why}");
+                }
+            }
+        }
+        self.list_by_walking()
     }
 
     fn download(&mut self, path: &RelPath) -> Result<Download, RemoteError> {
