@@ -192,6 +192,10 @@ mod tests {
         // packaging/icons/ is what the install script and packages install
         // for menus before the app ever ran; it must be the app's icon.
         let packaged = include_str!("../../../packaging/icons/io.github.brbla.IkeLoud.svg");
-        assert_eq!(packaged, app_svg(), "regenerate packaging/icons from app_svg()");
+        assert_eq!(
+            packaged,
+            app_svg(),
+            "regenerate packaging/icons from app_svg()"
+        );
     }
 }

@@ -31,6 +31,8 @@ pub struct Paths {
     pub pending: PathBuf,
     /// A request of the GUI to the daemon (confirm, sync now).
     pub request: PathBuf,
+    /// The latest journal entries (daemon → GUI).
+    pub journal: PathBuf,
     /// Local history: replaced versions kept for 30 days.
     pub history: PathBuf,
     /// The user's trash (freedesktop.org), where local deletions go.
@@ -65,6 +67,7 @@ impl Paths {
             status: state.join("status"),
             pending: state.join("pending-changes"),
             request: state.join("request"),
+            journal: state.join("journal"),
             history: data.join("ikeloud").join("history"),
             trash: data.join("Trash"),
         }
@@ -361,6 +364,57 @@ impl Request {
     }
 }
 
+/// One journal entry as the GUI shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalLine {
+    /// Seconds since 1970.
+    pub time: u64,
+    /// What happened (`uploaded`, `downloaded`, `trashed-remote`, …).
+    pub kind: String,
+    /// The file.
+    pub path: String,
+    /// Target of a move, or the name of a conflict copy.
+    pub target: Option<String>,
+}
+
+/// Writes the latest journal entries, newest first, one per line
+/// (`time<TAB>kind<TAB>path[<TAB>target]`).
+pub fn save_journal(path: &Path, lines: &[JournalLine]) -> io::Result<()> {
+    let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+    let mut text = String::new();
+    for line in lines {
+        text.push_str(&format!(
+            "{}\t{}\t{}",
+            line.time,
+            clean(&line.kind),
+            clean(&line.path)
+        ));
+        if let Some(target) = &line.target {
+            text.push('\t');
+            text.push_str(&clean(target));
+        }
+        text.push('\n');
+    }
+    write_private(path, text.as_bytes())
+}
+
+/// Reads the journal file; empty when there is none.
+pub fn load_journal(path: &Path) -> Vec<JournalLine> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\t');
+            Some(JournalLine {
+                time: parts.next()?.parse().ok()?,
+                kind: parts.next()?.to_string(),
+                path: parts.next()?.to_string(),
+                target: parts.next().map(str::to_string),
+            })
+        })
+        .collect()
+}
+
 /// Seconds since 1970.
 pub fn unix_now() -> u64 {
     SystemTime::now()
@@ -606,6 +660,33 @@ mod tests {
         assert_eq!(Request::take(&request), Some(Request::SyncNow));
         fs::write(&request, "confirm=\n").unwrap();
         assert_eq!(Request::take(&request), None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn journal_round_trip() {
+        let dir = temp("journal");
+        let path = dir.join("journal");
+        assert!(load_journal(&path).is_empty());
+        let lines = vec![
+            JournalLine {
+                time: 5,
+                kind: "conflict-copy".to_string(),
+                path: "a.txt".to_string(),
+                target: Some("a (konflikt).txt".to_string()),
+            },
+            JournalLine {
+                time: 4,
+                kind: "uploaded".to_string(),
+                path: "b\tc".to_string(),
+                target: None,
+            },
+        ];
+        save_journal(&path, &lines).unwrap();
+        let read = load_journal(&path);
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[0], lines[0]);
+        assert_eq!(read[1].path, "b c");
         fs::remove_dir_all(dir).unwrap();
     }
 

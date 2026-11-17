@@ -18,8 +18,8 @@ use std::time::SystemTime;
 
 use ikeloud_api::{ApiError, Client, HttpsTransport, SavedSession};
 use ikeloud_config::{
-    Paths, PendingChange, PendingChanges, Request, Settings, State, Status as FileStatus,
-    write_private,
+    JournalLine, Paths, PendingChange, PendingChanges, Request, Settings, State,
+    Status as FileStatus, save_journal, write_private,
 };
 use ikeloud_daemon::{
     Daemon, Download, Event, ICloudRemote, Listing, Remote, RemoteError, RunOutcome, Status,
@@ -133,6 +133,9 @@ fn main() -> ExitCode {
     let waiting: Arc<Mutex<Option<(String, MassChangeSummary)>>> = Arc::new(Mutex::new(None));
     spawn_requests(paths.request.clone(), events.clone(), Arc::clone(&waiting));
     let pending_path = paths.pending.clone();
+    // A second connection for reading the journal (WAL: no blocking).
+    let journal_db = StateDb::open(&paths.state_db).ok();
+    let journal_path = paths.journal.clone();
     let settings_path = paths.settings.clone();
     let mut on_status = |status: Status| {
         let (state, detail) = describe(&status);
@@ -156,6 +159,18 @@ fn main() -> ExitCode {
             if first_download_complete(report) && !first_done.exists() {
                 let _ = write_private(&first_done, b"1\n");
             }
+        }
+        if let Some(entries) = journal_db.as_ref().and_then(|db| db.journal(50).ok()) {
+            let lines: Vec<JournalLine> = entries
+                .into_iter()
+                .map(|e| JournalLine {
+                    time: e.time,
+                    kind: e.kind.name().to_string(),
+                    path: e.path.as_str().to_string(),
+                    target: e.target.map(|t| t.as_str().to_string()),
+                })
+                .collect();
+            let _ = save_journal(&journal_path, &lines);
         }
         mode.set(sync_mode(
             Settings::load(&settings_path)
