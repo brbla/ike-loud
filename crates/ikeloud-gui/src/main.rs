@@ -46,7 +46,9 @@ fn main() -> glib::ExitCode {
 
 /// Widgets of the status page.
 struct StatusView {
-    page: adw::StatusPage,
+    icon: gtk::Image,
+    title: gtk::Label,
+    detail: gtk::Label,
     pause: gtk::Button,
 }
 
@@ -201,8 +203,22 @@ impl App {
 
     /// A page: header bar, a clamp, and `content` in a vertical box.
     fn page(&self, title: &str, content: &gtk::Box) -> adw::NavigationPage {
+        self.page_with(title, content, None)
+    }
+
+    /// A page with a button at the end of the header bar.
+    fn page_with(
+        &self,
+        title: &str,
+        content: &gtk::Box,
+        header_end: Option<&gtk::Button>,
+    ) -> adw::NavigationPage {
         let toolbar = adw::ToolbarView::new();
-        toolbar.add_top_bar(&adw::HeaderBar::new());
+        let header = adw::HeaderBar::new();
+        if let Some(button) = header_end {
+            header.pack_end(button);
+        }
+        toolbar.add_top_bar(&header);
         let clamp = adw::Clamp::builder()
             .maximum_size(420)
             .child(content)
@@ -550,39 +566,63 @@ impl App {
     }
 
     fn show_status(self: &Rc<Self>) {
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        let page = adw::StatusPage::builder()
-            .icon_name(Badge::Quiet.icon_name())
-            .title(self.t("gui-state-starting"))
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(12)
+            .valign(gtk::Align::Center)
             .vexpand(true)
+            .build();
+        // A small icon, so the page fits a small screen without scrolling.
+        let icon = gtk::Image::builder()
+            .icon_name(Badge::Quiet.icon_name())
+            .pixel_size(64)
+            .build();
+        let title = gtk::Label::builder()
+            .label(self.t("gui-state-starting"))
+            .wrap(true)
+            .css_classes(["title-2"])
+            .build();
+        let detail = gtk::Label::builder()
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .css_classes(["dim-label"])
             .build();
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(12)
             .halign(gtk::Align::Center)
+            .margin_top(12)
             .build();
         let open = Self::action_button(&self.t("gui-open-folder"));
         let pause = gtk::Button::builder()
             .label(self.t("gui-pause"))
             .css_classes(["pill"])
             .build();
-        let sign_out = gtk::Button::builder()
-            .label(self.t("gui-sign-out"))
-            .css_classes(["flat"])
-            .build();
         buttons.append(&open);
         buttons.append(&pause);
-        buttons.append(&sign_out);
         let note = gtk::Label::builder()
             .label(self.t("gui-read-only"))
             .wrap(true)
             .justify(gtk::Justification::Center)
+            .margin_top(12)
             .css_classes(["dim-label", "caption"])
             .build();
-        page.set_child(Some(&buttons));
-        content.append(&page);
+        content.append(&icon);
+        content.append(&title);
+        content.append(&detail);
+        content.append(&buttons);
         content.append(&note);
 
+        let settings = gtk::Button::builder()
+            .icon_name("emblem-system-symbolic")
+            .tooltip_text(self.t("gui-settings"))
+            .build();
+        let this = Rc::downgrade(self);
+        settings.connect_clicked(move |_| {
+            if let Some(this) = this.upgrade() {
+                this.nav.push(&this.settings_page());
+            }
+        });
         let this = Rc::downgrade(self);
         open.connect_clicked(move |_| {
             if let Some(this) = this.upgrade() {
@@ -595,18 +635,136 @@ impl App {
                 this.toggle_pause();
             }
         });
+        *self.status_view.borrow_mut() = Some(StatusView {
+            icon,
+            title,
+            detail,
+            pause,
+        });
+        self.shown.set(None);
+        self.nav
+            .replace(&[self.page_with("ike loud", &content, Some(&settings))]);
+        self.tick();
+    }
+
+    /// Settings: the synced folder and the account.
+    fn settings_page(self: &Rc<Self>) -> adw::NavigationPage {
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 24);
+
+        let folder_group = adw::PreferencesGroup::builder()
+            .title(self.t("gui-folder"))
+            .description(self.t("gui-folder-change-description"))
+            .build();
+        let folder_row = adw::ActionRow::builder()
+            .title(self.t("gui-folder"))
+            .subtitle(self.folder.borrow().to_string_lossy().as_ref())
+            .build();
+        folder_row.add_css_class("property");
+        let change = gtk::Button::builder()
+            .label(self.t("gui-folder-change"))
+            .valign(gtk::Align::Center)
+            .build();
+        folder_row.add_suffix(&change);
+        folder_group.add(&folder_row);
+        content.append(&folder_group);
+
+        let account_group = adw::PreferencesGroup::builder()
+            .title(self.t("gui-account-section"))
+            .build();
+        let account = std::fs::read_to_string(&self.paths.session)
+            .ok()
+            .and_then(|t| SavedSession::from_json(&t))
+            .map(|s| s.account_name().to_string())
+            .unwrap_or_default();
+        let account_row = adw::ActionRow::builder()
+            .title(self.t("gui-account"))
+            .subtitle(account)
+            .build();
+        account_row.add_css_class("property");
+        let sign_out = gtk::Button::builder()
+            .label(self.t("gui-sign-out"))
+            .valign(gtk::Align::Center)
+            .css_classes(["destructive-action"])
+            .build();
+        account_row.add_suffix(&sign_out);
+        account_group.add(&account_row);
+        content.append(&account_group);
+
+        let this = Rc::downgrade(self);
+        change.connect_clicked(move |_| {
+            let Some(this) = this.upgrade() else { return };
+            let dialog = gtk::FileDialog::builder()
+                .title(this.t("gui-folder"))
+                .modal(true)
+                .build();
+            let weak = Rc::downgrade(&this);
+            let row = folder_row.clone();
+            dialog.select_folder(Some(&this.window), gio::Cancellable::NONE, move |result| {
+                let (Some(this), Ok(file)) = (weak.upgrade(), result) else {
+                    return;
+                };
+                if let Some(path) = file.path() {
+                    this.change_folder(&path, &row);
+                }
+            });
+        });
         let this = Rc::downgrade(self);
         sign_out.connect_clicked(move |_| {
             if let Some(this) = this.upgrade() {
                 this.sign_out();
             }
         });
-        *self.status_view.borrow_mut() = Some(StatusView {
-            page: page.clone(),
-            pause,
+        self.page(&self.t("gui-settings"), &content)
+    }
+
+    /// Moves syncing to another (new or empty) folder. The old folder keeps
+    /// its files. The sync state belongs to the old folder and is dropped:
+    /// kept, it would take the files missing in the new folder for deleted
+    /// ones instead of downloading them. Read-only, so nothing is lost.
+    fn change_folder(self: &Rc<Self>, folder: &Path, row: &adw::ActionRow) {
+        if folder == self.folder.borrow().as_path() {
+            return;
+        }
+        let problem = match check_folder(folder, &self.paths) {
+            Ok(()) => None,
+            Err(FolderProblem::NotEmpty) => Some("gui-folder-not-empty"),
+            Err(FolderProblem::NotAFolder) => Some("gui-folder-not-a-folder"),
+            Err(FolderProblem::Overlaps(_)) => Some("gui-folder-overlaps"),
+            Err(_) => Some("gui-folder-error"),
+        };
+        if let Some(key) = problem {
+            self.toast(&self.t(key));
+            return;
+        }
+        let status = Status::load(&self.paths.status);
+        let was_paused = self.paused.get();
+        self.daemon.borrow_mut().stop(status.as_ref());
+        let saved = std::fs::create_dir_all(folder).and_then(|()| {
+            Settings {
+                folder: Some(folder.to_path_buf()),
+            }
+            .save(&self.paths.settings)
         });
-        self.shown.set(None);
-        self.nav.replace(&[self.page("ike loud", &content)]);
+        if let Err(e) = saved {
+            self.toast(&format!("{}: {e}", self.t("gui-folder-error")));
+            if !was_paused {
+                self.start_daemon();
+            }
+            return;
+        }
+        let db = self.paths.state_db.as_os_str().to_owned();
+        for suffix in ["", "-wal", "-shm"] {
+            let mut path = db.clone();
+            path.push(suffix);
+            let _ = std::fs::remove_file(PathBuf::from(path));
+        }
+        let _ = std::fs::remove_file(&self.paths.status);
+        *self.folder.borrow_mut() = folder.to_path_buf();
+        row.set_subtitle(&folder.to_string_lossy());
+        self.toast(&self.t("gui-folder-changed"));
+        if !was_paused {
+            self.start_daemon();
+        }
         self.tick();
     }
 
@@ -638,6 +796,7 @@ impl App {
             *guard = None;
         }
         *self.status_view.borrow_mut() = None;
+        self.paused.set(false);
         self.nav.replace(&[self.signin_page()]);
         self.tick();
     }
@@ -717,9 +876,10 @@ impl App {
             return;
         }
         if let Some(view) = self.status_view.borrow().as_ref() {
-            view.page.set_icon_name(Some(&badge.icon_name()));
-            view.page.set_title(&title);
-            view.page.set_description(Some(&detail));
+            view.icon.set_icon_name(Some(&badge.icon_name()));
+            view.title.set_label(&title);
+            view.detail.set_label(&detail);
+            view.detail.set_visible(!detail.is_empty());
             view.pause
                 .set_label(&self.t(if paused { "gui-resume" } else { "gui-pause" }));
         }

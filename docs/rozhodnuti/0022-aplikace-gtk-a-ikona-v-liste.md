@@ -23,6 +23,12 @@ Datum: 2026-11-17 · Milník 1
   možností poslat nový), složka (výchozí `~/iCloud`, jen nová nebo
   prázdná, ne vlastní složky aplikace: `ikeloud_config::check_folder`),
   pak start démona. Kódy e-mailem Apple neposílá (0021).
+- **Nastavení** (ozubené kolečko v hlavičce): synchronizovaná složka se
+  změnou a účet s odhlášením. Nová složka musí být nová nebo prázdná; ve
+  staré soubory zůstanou. Stav synchronizace patří ke staré složce a
+  zahodí se: jinak by soubory chybějící v nové složce vypadaly jako
+  smazané a nestáhly by se. Jen pro čtení tím nic nezmizí; až se bude
+  zapisovat, bude změna složky potřebovat vlastní postup.
 - **Přihlašuje aplikace, synchronizuje démon.** Aplikace předá relaci
   souborem `$XDG_STATE_HOME/ikeloud/session.json` (0600); heslo se
   neukládá. Démon píše svůj stav do `…/ikeloud/status` (`key=value`,
