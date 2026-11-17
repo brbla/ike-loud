@@ -79,3 +79,54 @@ conflict-copy-name =
         [1] konflikt Linux { $date }
        *[other] konflikt Linux { $date } { $number }
     }){ $extension }
+
+## App window and setup (ikeloud-gui)
+
+gui-signin-title = Přihlášení k iCloudu
+gui-signin-description = Použijte svůj Apple účet. ike loud si heslo neukládá: pamatuje si jen přihlášení.
+gui-account = Apple účet (e-mail)
+gui-password = Heslo
+gui-signin = Přihlásit
+gui-code-title = Ověřovací kód
+gui-code-description = Apple poslal šestimístný kód na telefonní číslo končící { $phone }.
+gui-code = Kód
+gui-verify = Ověřit
+gui-resend = Poslat nový kód
+gui-code-sent = Nový kód je na cestě.
+gui-folder-title = Kam ukládat soubory
+gui-folder-description = Do této složky se stáhne iCloud Drive. Musí být nová nebo prázdná: ike loud nikdy nesmíchá iCloud se soubory, které už tam jsou.
+gui-folder = Složka
+gui-folder-choose = Vybrat…
+gui-folder-done = Začít stahovat
+gui-folder-not-empty = Složka není prázdná. Vyberte prázdnou nebo novou.
+gui-folder-not-a-folder = Tohle je soubor, ne složka.
+gui-folder-overlaps = Tato složka patří samotnému ike loud. Vyberte jinou.
+gui-folder-error = Tuto složku nejde použít.
+gui-error-credentials = Špatný Apple účet nebo heslo.
+gui-error-code = Špatný nebo prošlý kód.
+gui-error-too-many = Příliš mnoho pokusů. Chvíli počkejte a zkuste to znovu.
+gui-error-no-phone = Apple účet nemá důvěryhodné telefonní číslo pro kód.
+gui-error-offline = Nejde se spojit s iCloudem. Zkontrolujte připojení k internetu.
+gui-error-drive-not-set-up = iCloud Drive ještě není založený. Jednou ho otevřete na icloud.com a pak se přihlaste znovu.
+gui-error-drive-unavailable = Tento Apple účet nemá iCloud Drive.
+gui-error-other = Přihlášení se nepovedlo: { $detail }
+gui-open-folder = Otevřít složku
+gui-pause = Pozastavit
+gui-resume = Pokračovat
+gui-sign-out = Odhlásit
+gui-show = Zobrazit ike loud
+gui-quit = Ukončit
+gui-state-starting = Spouští se
+gui-state-idle = Aktuální
+gui-state-syncing = Synchronizuje
+gui-state-needs-confirmation = Čeká na vaše potvrzení
+gui-state-signed-out = Odhlášeno
+gui-state-offline = Bez připojení
+gui-state-error = Vyžaduje pozornost
+gui-state-paused = Pozastaveno
+gui-state-idle-detail = Souborů na iCloudu: { $files }. Staženo od spuštění: { $downloaded }.
+gui-state-syncing-detail = Staženo od spuštění: { $downloaded }.
+gui-state-signed-out-detail = Přihlášení vypršelo. Pro pokračování se přihlaste znovu.
+gui-state-offline-detail = Zkusí to znovu samo.
+gui-state-paused-detail = Dokud nebudete pokračovat, nic se nestahuje.
+gui-read-only = Zatím jen čtení: na iCloud se nikdy nic nezapíše.

@@ -48,6 +48,13 @@ jobs:
       - name: Fixed mtime for vendored sources
         run: find vendor -exec touch -h -d '2000-01-01T00:00:00Z' {} +
 
+      # The GUI links GTK 4 and libadwaita from the system (pkg-config).
+      # Before the fingerprint: their versions are part of the key.
+      - name: GTK 4 and libadwaita development files
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libgtk-4-dev libadwaita-1-dev
+
       - name: Fingerprint of the dependency cache inputs
         id: key
         run: |
