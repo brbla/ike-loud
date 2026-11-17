@@ -143,6 +143,7 @@ fn all_messages() -> Vec<Message> {
         "gui-folder-changed",
         "gui-account-section",
         "gui-cancel",
+        "gui-folder-absolute",
         "gui-folder-trash-and-start",
         "gui-folder-protected",
         "gui-folder-nested",
@@ -156,6 +157,7 @@ fn all_messages() -> Vec<Message> {
     for count in [1, 3, 7] {
         messages
             .push(Message::new("gui-folder-will-be-emptied").arg("count", Value::Number(count)));
+        messages.push(Message::new("gui-local-pending").arg("count", Value::Number(count)));
     }
     messages.push(Message::new("gui-folder-trash-failed").arg("detail", Value::Text("x".into())));
     messages.push(Message::new("gui-change-body").arg("folder", Value::Text("/x".into())));

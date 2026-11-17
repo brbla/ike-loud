@@ -91,7 +91,7 @@ gui-verify = Verify
 gui-resend = Send a new code
 gui-code-sent = A new code is on its way.
 gui-folder-title = Where to keep your files
-gui-folder-description = iCloud Drive will be downloaded into this folder. It must be new or empty: ike loud never mixes your iCloud with files that are already there.
+gui-folder-description = iCloud Drive will be downloaded into this folder. Best a new or empty one; anything already in it goes to the trash after you confirm, so that only iCloud is there.
 gui-folder = Folder
 gui-folder-choose = Choose…
 gui-folder-done = Start downloading
@@ -130,6 +130,7 @@ gui-folder-change = Change…
 gui-folder-change-description = Where iCloud Drive is downloaded. A new folder must be new or empty; the old one keeps its files.
 gui-folder-changed = The folder changed. iCloud Drive is being downloaded into it.
 gui-account-section = Account
+gui-folder-absolute = Type the whole path, e.g. ~/iCloud or /home/you/iCloud.
 gui-cancel = Cancel
 gui-folder-will-be-emptied =
     { $count ->
@@ -145,4 +146,9 @@ gui-change-body = iCloud Drive will be downloaded again, all of it, into { $fold
 gui-change-old = The current folder { $old } can stay as it is or go to the trash (you can restore it from there).
 gui-change-keep-old = Change, Keep the Old One
 gui-change-trash-old = Change, Old One to Trash
+gui-local-pending =
+    { $count ->
+        [one] 1 local change is not uploaded: for now ike loud only reads from iCloud.
+       *[other] { $count } local changes are not uploaded: for now ike loud only reads from iCloud.
+    }
 gui-read-only = Read-only for now: nothing is ever written to iCloud.

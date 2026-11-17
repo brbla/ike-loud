@@ -106,17 +106,25 @@ fn main() -> ExitCode {
         }),
     );
     let counts = Cell::new((0u64, 0u64));
+    // Local changes the last run deferred (read-only: never uploaded).
+    let pending = Cell::new(0u64);
     let mut remote = Reporting {
         inner: remote,
         status: &paths.status,
         counts: &counts,
+        pending: &pending,
     };
     let mut daemon = Daemon::new(setup, db, watches, Timing::DEFAULT);
     let status_path = paths.status.clone();
     let mut on_status = |status: Status| {
         let (state, detail) = describe(&status);
+        if let Ok(RunOutcome::Ran(report)) = &status.outcome {
+            pending.set(u64::try_from(report.deferred.len()).unwrap_or(u64::MAX));
+        }
         let (files, downloaded) = counts.get();
-        let _ = FileStatus::now(state, detail, files, downloaded).save(&status_path);
+        let mut file = FileStatus::now(state, detail, files, downloaded);
+        file.local_pending = pending.get();
+        let _ = file.save(&status_path);
     };
     // The loop ends when every event sender is gone; the watcher keeps one.
     let _keep = events;
@@ -132,16 +140,11 @@ fn describe(status: &Status) -> (State, String) {
             if let Some(stop) = report.executed.stopped {
                 return stopped(stop);
             }
-            let waiting = report.deferred.len();
-            if !report.executed.done.is_empty() {
-                (State::Syncing, String::new())
-            } else if waiting > 0 {
-                (
-                    State::Idle,
-                    format!("{waiting} local changes are not uploaded (read-only)"),
-                )
-            } else {
+            // Deferred local changes go to the status as a number.
+            if report.executed.done.is_empty() {
                 (State::Idle, String::new())
+            } else {
+                (State::Syncing, String::new())
             }
         }
         Ok(RunOutcome::Rejected(Rejection::MassChangeNeedsConfirmation(_))) => {
@@ -177,12 +180,16 @@ struct Reporting<'a, R: Remote> {
     status: &'a Path,
     /// (files on iCloud, files downloaded since start)
     counts: &'a Cell<(u64, u64)>,
+    /// Local changes not uploaded, from the last run.
+    pending: &'a Cell<u64>,
 }
 
 impl<R: Remote> Reporting<'_, R> {
     fn save(&self, detail: &str) {
         let (files, downloaded) = self.counts.get();
-        let _ = FileStatus::now(State::Syncing, detail, files, downloaded).save(self.status);
+        let mut file = FileStatus::now(State::Syncing, detail, files, downloaded);
+        file.local_pending = self.pending.get();
+        let _ = file.save(self.status);
     }
 }
 

@@ -486,9 +486,11 @@ impl App {
             &self.t("gui-folder-description"),
         );
         let group = adw::PreferencesGroup::new();
-        let row = adw::ActionRow::builder()
+        // The path can be typed or pasted, or picked in the desktop's own
+        // folder dialog (KDE's on Plasma, GNOME's on GNOME, via the portal).
+        let row = adw::EntryRow::builder()
             .title(self.t("gui-folder"))
-            .subtitle(self.folder.borrow().to_string_lossy().as_ref())
+            .text(self.folder.borrow().to_string_lossy().as_ref())
             .build();
         let choose = gtk::Button::builder()
             .label(self.t("gui-folder-choose"))
@@ -522,6 +524,14 @@ impl App {
         check(self);
         {
             let check = check.clone();
+            let this = this.clone();
+            row.connect_changed(move |row| {
+                let Some(this) = this.upgrade() else { return };
+                *this.folder.borrow_mut() = folder_from_text(&row.text());
+                check(&this);
+            });
+        }
+        {
             let row = row.clone();
             choose.connect_clicked(move |_| {
                 let Some(this) = this.upgrade() else { return };
@@ -529,17 +539,11 @@ impl App {
                     .title(this.t("gui-folder"))
                     .modal(true)
                     .build();
-                let check = check.clone();
                 let row = row.clone();
-                let weak = Rc::downgrade(&this);
                 dialog.select_folder(Some(&this.window), gio::Cancellable::NONE, move |result| {
-                    let (Some(this), Ok(file)) = (weak.upgrade(), result) else {
-                        return;
-                    };
-                    if let Some(path) = file.path() {
-                        row.set_subtitle(&path.to_string_lossy());
-                        *this.folder.borrow_mut() = path;
-                        check(&this);
+                    // Setting the text checks the folder (connect_changed).
+                    if let Ok(path) = result.map(|file| file.path()) {
+                        row.set_text(&path.unwrap_or_default().to_string_lossy());
                     }
                 });
             });
@@ -615,6 +619,7 @@ impl App {
             }
             Err(FolderProblem::NotAFolder) => Err(self.t("gui-folder-not-a-folder")),
             Err(FolderProblem::Overlaps(_)) => Err(self.t("gui-folder-overlaps")),
+            Err(FolderProblem::NotAbsolute) => Err(self.t("gui-folder-absolute")),
             Err(_) => Err(self.t("gui-folder-error")),
         }
     }
@@ -775,11 +780,11 @@ impl App {
             .title(self.t("gui-folder"))
             .description(self.t("gui-folder-change-description"))
             .build();
-        let folder_row = adw::ActionRow::builder()
+        let folder_row = adw::EntryRow::builder()
             .title(self.t("gui-folder"))
-            .subtitle(self.folder.borrow().to_string_lossy().as_ref())
+            .text(self.folder.borrow().to_string_lossy().as_ref())
+            .show_apply_button(true)
             .build();
-        folder_row.add_css_class("property");
         let change = gtk::Button::builder()
             .label(self.t("gui-folder-change"))
             .valign(gtk::Align::Center)
@@ -810,6 +815,12 @@ impl App {
         account_group.add(&account_row);
         content.append(&account_group);
 
+        let this = Rc::downgrade(self);
+        folder_row.connect_apply(move |row| {
+            if let Some(this) = this.upgrade() {
+                this.change_folder(&folder_from_text(&row.text()), row);
+            }
+        });
         let this = Rc::downgrade(self);
         change.connect_clicked(move |_| {
             let Some(this) = this.upgrade() else { return };
@@ -843,7 +854,7 @@ impl App {
     /// state belongs to the old folder and is dropped: kept, it would take
     /// the files missing in the new folder for deleted ones. Read-only, so
     /// iCloud itself is never touched.
-    fn change_folder(self: &Rc<Self>, folder: &Path, row: &adw::ActionRow) {
+    fn change_folder(self: &Rc<Self>, folder: &Path, row: &adw::EntryRow) {
         let old = self.folder.borrow().clone();
         if folder == old.as_path() {
             return;
@@ -852,6 +863,7 @@ impl App {
             Ok(count) => count,
             Err(text) => {
                 self.toast(&text);
+                row.set_text(&old.to_string_lossy());
                 return;
             }
         };
@@ -881,6 +893,8 @@ impl App {
             move |this, answer| {
                 if answer == "keep" || answer == "trash" {
                     this.apply_folder_change(&folder, &old, answer == "trash", &row);
+                } else {
+                    row.set_text(&old.to_string_lossy());
                 }
             },
         );
@@ -891,7 +905,7 @@ impl App {
         folder: &Path,
         old: &Path,
         trash_old: bool,
-        row: &adw::ActionRow,
+        row: &adw::EntryRow,
     ) {
         let status = Status::load(&self.paths.status);
         let was_paused = self.paused.get();
@@ -904,6 +918,7 @@ impl App {
         };
         if let Err(text) = self.empty_into_trash(folder) {
             self.toast(&text);
+            row.set_text(&old.to_string_lossy());
             resume(self);
             return;
         }
@@ -915,6 +930,7 @@ impl App {
         });
         if let Err(e) = saved {
             self.toast(&format!("{}: {e}", self.t("gui-folder-error")));
+            row.set_text(&old.to_string_lossy());
             resume(self);
             return;
         }
@@ -926,7 +942,7 @@ impl App {
         }
         let _ = std::fs::remove_file(&self.paths.status);
         *self.folder.borrow_mut() = folder.to_path_buf();
-        row.set_subtitle(&folder.to_string_lossy());
+        row.set_text(&folder.to_string_lossy());
         let mut note = self.t("gui-folder-changed");
         if trash_old && let Err(e) = gio::File::for_path(old).trash(gio::Cancellable::NONE) {
             note = self.message(
@@ -1074,16 +1090,23 @@ impl App {
         }
         let files = status.map(|s| s.remote_files).unwrap_or(0);
         let downloaded = status.map(|s| s.downloaded).unwrap_or(0);
+        let pending = status.map(|s| s.local_pending).unwrap_or(0);
         let raw = status.map(|s| s.detail.clone()).unwrap_or_default();
         match state {
-            Some(State::Idle) => (
-                self.t("gui-state-idle"),
-                self.message(
+            Some(State::Idle) => {
+                let mut detail = self.message(
                     &Message::new("gui-state-idle-detail")
                         .arg("files", Value::Number(files))
                         .arg("downloaded", Value::Number(downloaded)),
-                ),
-            ),
+                );
+                if pending > 0 {
+                    detail.push_str("\n\n");
+                    detail.push_str(&self.message(
+                        &Message::new("gui-local-pending").arg("count", Value::Number(pending)),
+                    ));
+                }
+                (self.t("gui-state-idle"), detail)
+            }
             Some(State::Syncing) => (
                 self.t("gui-state-syncing"),
                 self.message(
@@ -1126,4 +1149,15 @@ fn user_dirs() -> Vec<PathBuf> {
     .into_iter()
     .filter_map(glib::user_special_dir)
     .collect()
+}
+
+/// A folder typed by the user: `~` stands for the home folder.
+fn folder_from_text(text: &str) -> PathBuf {
+    let text = text.trim();
+    match text.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+            home().join(rest.trim_start_matches('/'))
+        }
+        _ => PathBuf::from(text),
+    }
 }
