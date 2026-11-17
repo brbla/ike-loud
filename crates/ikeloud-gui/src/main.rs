@@ -1250,12 +1250,41 @@ impl App {
         self.tick();
     }
 
+    /// Opens the synced folder in the desktop's file manager. Asked over
+    /// D-Bus (`org.freedesktop.FileManager1`, Dolphin and Nautilus provide
+    /// it), so the file manager runs in the session with the user's settings
+    /// and theme, not as a child of this app with its environment. Without
+    /// that service: GTK's launcher (the portal, or the default handler).
     fn open_folder(&self) {
         let file = gio::File::for_path(&*self.folder.borrow());
-        gtk::FileLauncher::new(Some(&file)).launch(
-            Some(&self.window),
+        let uri = file.uri().to_string();
+        let window = self.window.clone();
+        let fallback = move || {
+            gtk::FileLauncher::new(Some(&file)).launch(
+                Some(&window),
+                gio::Cancellable::NONE,
+                |_| {},
+            );
+        };
+        let Ok(bus) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) else {
+            fallback();
+            return;
+        };
+        bus.call(
+            Some("org.freedesktop.FileManager1"),
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1",
+            "ShowFolders",
+            Some(&(vec![uri], String::new()).to_variant()),
+            None,
+            gio::DBusCallFlags::NONE,
+            5000,
             gio::Cancellable::NONE,
-            |_| {},
+            move |result| {
+                if result.is_err() {
+                    fallback();
+                }
+            },
         );
     }
 
