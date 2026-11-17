@@ -22,6 +22,15 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::fs::{self, File};
+
+/// `println!` that ignores a closed output (e.g. piped into `head`)
+/// instead of panicking.
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), $($arg)*);
+    }};
+}
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -166,7 +175,7 @@ fn ls(path: &str) -> Result<()> {
         Some(_) => return Err(format!("not a folder: {path}").into()),
     };
     let folder = client.list_folder(&id)?;
-    println!(
+    say!(
         "{}  etag {}  ({} items)",
         if folder.name.is_empty() {
             "/"
@@ -183,7 +192,7 @@ fn ls(path: &str) -> Result<()> {
             Kind::Other => "?   ",
         };
         let size = item.size.map(|s| s.to_string()).unwrap_or_default();
-        println!(
+        say!(
             "{kind} {size:>12}  {:<25} etag {:<6} {}",
             item.modified.as_deref().unwrap_or("-"),
             item.etag,
@@ -212,7 +221,7 @@ fn get(path: &str, target: &str) -> Result<()> {
     };
     file.sync_all()?;
     fs::rename(&tmp, target)?;
-    println!("{written} bytes -> {target}");
+    say!("{written} bytes -> {target}");
     save(&client)
 }
 
@@ -240,7 +249,7 @@ fn mkdir(path: &str) -> Result<()> {
     let (parent, name) = split(path)?;
     let (parent_id, _) = folder(&mut client, &parent)?;
     let created = client.create_folder(&parent_id, &name)?;
-    println!("created {path} (etag {})", created.etag);
+    say!("created {path} (etag {})", created.etag);
     save(&client)
 }
 
@@ -273,7 +282,7 @@ fn put(file: &str, path: &str) -> Result<()> {
     } else {
         "uploaded"
     };
-    println!("{how} {path} (etag {})", uploaded.etag);
+    say!("{how} {path} (etag {})", uploaded.etag);
     save(&client)
 }
 
@@ -290,7 +299,7 @@ fn mv(from: &str, to: &str) -> Result<()> {
     if item.name != to_name {
         etag = client.rename(&item.drivewsid, &etag, &to_name)?;
     }
-    println!("moved {from} -> {to} (etag {etag})");
+    say!("moved {from} -> {to} (etag {etag})");
     save(&client)
 }
 
@@ -298,6 +307,6 @@ fn rm(path: &str) -> Result<()> {
     let mut client = load()?;
     let item = resolve(&mut client, path)?.ok_or("give a path")?;
     client.trash(&item.drivewsid, &item.etag)?;
-    println!("moved {path} to Recently Deleted");
+    say!("moved {path} to Recently Deleted");
     save(&client)
 }

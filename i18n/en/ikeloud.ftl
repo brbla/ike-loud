@@ -36,14 +36,14 @@ rejected-mass-change =
        *[other] Syncing would delete or overwrite { $changes ->
             [one] one file
            *[other] { $changes } files
-        } out of { $total } within a day.{" "}
+        } within a day.{" "}
     }{ $moves ->
         [0] {""}
        *[other] Syncing would move { $moves ->
             [one] one file
            *[other] { $moves } files
-        } out of { $total } within a day.{" "}
-    }Please check the list of files and confirm before it continues.
+        } within a day.{" "}
+    }{ $total } files are synced. Please check the list of files and confirm before it continues.
 rejected-icloud-space =
     There is not enough space on iCloud: { $needed } needed, { $free } free. Syncing has stopped and nothing is deleted. Free up space on iCloud or buy more.
 rejected-disk-space =
@@ -159,4 +159,13 @@ gui-upload-confirm = ike loud will upload new and changed files, and move delete
 gui-upload-turn-on = Turn On Uploads
 gui-two-way = Two-way: changes in the folder are uploaded to iCloud.
 gui-upload-waiting = Uploads are on; they start once the first download is complete.
+gui-confirm-changes = Carry Out the Changes
+gui-confirm-sent = Confirmed: the changes are carried out in the next run.
+gui-more-changes = … and { $count } more
+gui-kind-trash-remote = to iCloud's Recently Deleted
+gui-kind-overwrite-remote = new version on iCloud
+gui-kind-trash-local = to the trash on this computer
+gui-kind-overwrite-local = new version on this computer (the old one to history)
+gui-kind-move-remote = move on iCloud
+gui-kind-move-local = move on this computer
 gui-read-only = Read-only: nothing is written to iCloud. Uploads can be turned on in Settings.
