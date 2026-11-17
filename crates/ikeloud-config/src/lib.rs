@@ -83,6 +83,8 @@ pub struct Settings {
     /// beta (decision 0023); even on, the daemon only reads until the first
     /// download is complete.
     pub upload: bool,
+    /// The user paused syncing; it stays paused across restarts and logins.
+    pub paused: bool,
 }
 
 impl Settings {
@@ -99,6 +101,7 @@ impl Settings {
                 .map(PathBuf::from)
                 .filter(|p| p.is_absolute()),
             upload: map.get("upload").is_some_and(|v| v.trim() == "1"),
+            paused: map.get("paused").is_some_and(|v| v.trim() == "1"),
         })
     }
 
@@ -119,6 +122,9 @@ impl Settings {
         }
         if self.upload {
             text.push_str("upload=1\n");
+        }
+        if self.paused {
+            text.push_str("paused=1\n");
         }
         write_private(path, text.as_bytes())
     }
@@ -542,6 +548,7 @@ mod tests {
         let settings = Settings {
             folder: Some(PathBuf::from("/home/u/iCloud Drive")),
             upload: true,
+            paused: true,
         };
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), settings);
@@ -556,6 +563,7 @@ mod tests {
         let bad = Settings {
             folder: Some(PathBuf::from("/a\nb")),
             upload: false,
+            paused: false,
         };
         assert!(bad.save(&path).is_err());
         fs::remove_dir_all(dir).unwrap();

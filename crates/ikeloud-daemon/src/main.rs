@@ -44,7 +44,13 @@ fn main() -> ExitCode {
     };
     report(State::Starting, "");
 
-    let Some(folder) = Settings::load(&paths.settings).ok().and_then(|s| s.folder) else {
+    let settings = Settings::load(&paths.settings).unwrap_or_default();
+    if settings.paused {
+        // Paused by the user: also the service started at login stays idle.
+        let _ = std::fs::remove_file(&paths.status);
+        return ExitCode::SUCCESS;
+    }
+    let Some(folder) = settings.folder else {
         report(State::Error, "not set up: choose a folder in the app");
         return ExitCode::from(2);
     };
