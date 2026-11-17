@@ -138,6 +138,11 @@ fn all_messages() -> Vec<Message> {
         "gui-state-offline-detail",
         "gui-state-paused-detail",
         "gui-read-only",
+        "gui-settings",
+        "gui-folder-change",
+        "gui-folder-change-description",
+        "gui-folder-changed",
+        "gui-account-section",
     ] {
         messages.push(Message::new(key));
     }
