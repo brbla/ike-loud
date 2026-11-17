@@ -109,7 +109,6 @@ fn all_messages() -> Vec<Message> {
         "gui-folder",
         "gui-folder-choose",
         "gui-folder-done",
-        "gui-folder-not-empty",
         "gui-folder-not-a-folder",
         "gui-folder-overlaps",
         "gui-folder-error",
@@ -143,10 +142,24 @@ fn all_messages() -> Vec<Message> {
         "gui-folder-change-description",
         "gui-folder-changed",
         "gui-account-section",
+        "gui-cancel",
+        "gui-folder-trash-and-start",
+        "gui-folder-protected",
+        "gui-folder-nested",
+        "gui-change-heading",
+        "gui-change-keep-old",
+        "gui-change-trash-old",
     ] {
         messages.push(Message::new(key));
     }
     messages.push(Message::new("gui-code-description").arg("phone", Value::Text("37".into())));
+    for count in [1, 3, 7] {
+        messages
+            .push(Message::new("gui-folder-will-be-emptied").arg("count", Value::Number(count)));
+    }
+    messages.push(Message::new("gui-folder-trash-failed").arg("detail", Value::Text("x".into())));
+    messages.push(Message::new("gui-change-body").arg("folder", Value::Text("/x".into())));
+    messages.push(Message::new("gui-change-old").arg("old", Value::Text("/y".into())));
     messages.push(Message::new("gui-error-other").arg("detail", Value::Text("x".into())));
     messages.push(
         Message::new("gui-state-idle-detail")

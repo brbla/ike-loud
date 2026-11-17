@@ -19,7 +19,9 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 
 use ikeloud_api::{ApiError, Client, HttpsTransport, SavedSession, SignIn, TrustedPhone};
-use ikeloud_config::{FolderProblem, Paths, Settings, State, Status, check_folder, write_private};
+use ikeloud_config::{
+    FolderProblem, Paths, Settings, State, Status, check_folder, protected_folder, write_private,
+};
 use ikeloud_i18n::{Message, Translations, Value, languages_from_env};
 
 use crate::daemon::{DaemonProcess, EXIT_SIGNED_OUT};
@@ -495,11 +497,7 @@ impl App {
         row.add_suffix(&choose);
         group.add(&row);
         content.append(&group);
-        let problem = gtk::Label::builder()
-            .wrap(true)
-            .css_classes(["error"])
-            .visible(false)
-            .build();
+        let problem = gtk::Label::builder().wrap(true).visible(false).build();
         content.append(&problem);
         let done = Self::action_button(&self.t("gui-folder-done"));
         content.append(&done);
@@ -510,16 +508,15 @@ impl App {
             let done = done.clone();
             move |this: &Rc<Self>| {
                 let folder = this.folder.borrow().clone();
-                let text = match check_folder(&folder, &this.paths) {
-                    Ok(()) => None,
-                    Err(FolderProblem::NotEmpty) => Some(this.t("gui-folder-not-empty")),
-                    Err(FolderProblem::NotAFolder) => Some(this.t("gui-folder-not-a-folder")),
-                    Err(FolderProblem::Overlaps(_)) => Some(this.t("gui-folder-overlaps")),
-                    Err(_) => Some(this.t("gui-folder-error")),
+                let (text, error) = match this.folder_verdict(&folder, None) {
+                    Ok(0) => (None, false),
+                    Ok(count) => (Some(this.not_empty_text(count)), false),
+                    Err(text) => (Some(text), true),
                 };
                 problem.set_visible(text.is_some());
                 problem.set_label(text.as_deref().unwrap_or_default());
-                done.set_sensitive(text.is_none());
+                problem.set_css_classes(if error { &["error"] } else { &["warning"] });
+                done.set_sensitive(!error);
             }
         };
         check(self);
@@ -551,25 +548,141 @@ impl App {
         done.connect_clicked(move |_| {
             let Some(this) = this.upgrade() else { return };
             let folder = this.folder.borrow().clone();
-            if check_folder(&folder, &this.paths).is_err() {
-                check(&this);
+            let count = match this.folder_verdict(&folder, None) {
+                Ok(count) => count,
+                Err(_) => {
+                    check(&this);
+                    return;
+                }
+            };
+            let start = move |this: &Rc<Self>| {
+                if let Err(text) = this.empty_into_trash(&folder) {
+                    this.toast(&text);
+                    return;
+                }
+                let saved = std::fs::create_dir_all(&folder).and_then(|()| {
+                    Settings {
+                        folder: Some(folder.clone()),
+                    }
+                    .save(&this.paths.settings)
+                });
+                match saved {
+                    Ok(()) => {
+                        this.show_status();
+                        this.start_daemon();
+                    }
+                    Err(e) => this.toast(&format!("{}: {e}", this.t("gui-folder-error"))),
+                }
+            };
+            if count == 0 {
+                start(&this);
                 return;
             }
-            let saved = std::fs::create_dir_all(&folder).and_then(|()| {
-                Settings {
-                    folder: Some(folder.clone()),
-                }
-                .save(&this.paths.settings)
-            });
-            match saved {
-                Ok(()) => {
-                    this.show_status();
-                    this.start_daemon();
-                }
-                Err(e) => this.toast(&format!("{}: {e}", this.t("gui-folder-error"))),
-            }
+            let body = this.not_empty_text(count);
+            this.confirm(
+                &this.t("gui-folder-title"),
+                &body,
+                &[("start", "gui-folder-trash-and-start", true)],
+                move |this, response| {
+                    if response == "start" {
+                        start(this);
+                    }
+                },
+            );
         });
         self.page(&self.t("gui-folder-title"), &content)
+    }
+
+    /// Whether `folder` can become the synced folder: `Ok(n)` with the
+    /// number of items that would go to the trash first (0: new or empty),
+    /// or why not. `current` is the folder synced now (it must not contain
+    /// the new one or lie inside it).
+    fn folder_verdict(&self, folder: &Path, current: Option<&Path>) -> Result<usize, String> {
+        if let Some(current) = current
+            && (folder.starts_with(current) || current.starts_with(folder))
+        {
+            return Err(self.t("gui-folder-nested"));
+        }
+        match check_folder(folder, &self.paths) {
+            Ok(()) => Ok(0),
+            Err(FolderProblem::NotEmpty) => {
+                if protected_folder(folder, &home(), &user_dirs()) {
+                    return Err(self.t("gui-folder-protected"));
+                }
+                std::fs::read_dir(folder)
+                    .map(Iterator::count)
+                    .map_err(|e| format!("{}: {e}", self.t("gui-folder-error")))
+            }
+            Err(FolderProblem::NotAFolder) => Err(self.t("gui-folder-not-a-folder")),
+            Err(FolderProblem::Overlaps(_)) => Err(self.t("gui-folder-overlaps")),
+            Err(_) => Err(self.t("gui-folder-error")),
+        }
+    }
+
+    fn not_empty_text(&self, count: usize) -> String {
+        self.message(&Message::new("gui-folder-will-be-emptied").arg(
+            "count",
+            Value::Number(u64::try_from(count).unwrap_or(u64::MAX)),
+        ))
+    }
+
+    /// Moves everything in `folder` to the trash (recoverable), so only
+    /// iCloud ends up there. Stops at the first item that cannot be moved.
+    fn empty_into_trash(&self, folder: &Path) -> Result<(), String> {
+        if protected_folder(folder, &home(), &user_dirs()) {
+            return Err(self.t("gui-folder-protected"));
+        }
+        let entries = match std::fs::read_dir(folder) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(format!("{}: {e}", self.t("gui-folder-error"))),
+        };
+        for entry in entries {
+            let path = entry
+                .map_err(|e| format!("{}: {e}", self.t("gui-folder-error")))?
+                .path();
+            gio::File::for_path(&path)
+                .trash(gio::Cancellable::NONE)
+                .map_err(|e| {
+                    self.message(
+                        &Message::new("gui-folder-trash-failed")
+                            .arg("detail", Value::Text(format!("{}: {e}", path.display()))),
+                    )
+                })?;
+        }
+        Ok(())
+    }
+
+    /// A question with Cancel and the given answers `(id, text key,
+    /// destructive)`; `on_answer` gets the id (or "cancel").
+    fn confirm(
+        self: &Rc<Self>,
+        heading: &str,
+        body: &str,
+        answers: &[(&str, &'static str, bool)],
+        on_answer: impl FnOnce(&Rc<Self>, &str) + 'static,
+    ) {
+        let dialog = adw::AlertDialog::new(Some(heading), Some(body));
+        dialog.add_response("cancel", &self.t("gui-cancel"));
+        for (id, key, destructive) in answers {
+            dialog.add_response(id, &self.t(key));
+            dialog.set_response_appearance(
+                id,
+                if *destructive {
+                    adw::ResponseAppearance::Destructive
+                } else {
+                    adw::ResponseAppearance::Suggested
+                },
+            );
+        }
+        dialog.set_close_response("cancel");
+        dialog.set_default_response(Some("cancel"));
+        let weak = Rc::downgrade(self);
+        dialog.choose(Some(&self.window), gio::Cancellable::NONE, move |answer| {
+            if let Some(this) = weak.upgrade() {
+                on_answer(&this, answer.as_str());
+            }
+        });
     }
 
     fn show_status(self: &Rc<Self>) {
@@ -724,28 +837,76 @@ impl App {
         self.page(&self.t("gui-settings"), &content)
     }
 
-    /// Moves syncing to another (new or empty) folder. The old folder keeps
-    /// its files. The sync state belongs to the old folder and is dropped:
-    /// kept, it would take the files missing in the new folder for deleted
-    /// ones instead of downloading them. Read-only, so nothing is lost.
+    /// Moves syncing to another folder after the user confirms: what is in
+    /// the new folder goes to the trash first, the old folder is kept or
+    /// goes to the trash, and iCloud Drive is downloaded again. The sync
+    /// state belongs to the old folder and is dropped: kept, it would take
+    /// the files missing in the new folder for deleted ones. Read-only, so
+    /// iCloud itself is never touched.
     fn change_folder(self: &Rc<Self>, folder: &Path, row: &adw::ActionRow) {
-        if folder == self.folder.borrow().as_path() {
+        let old = self.folder.borrow().clone();
+        if folder == old.as_path() {
             return;
         }
-        let problem = match check_folder(folder, &self.paths) {
-            Ok(()) => None,
-            Err(FolderProblem::NotEmpty) => Some("gui-folder-not-empty"),
-            Err(FolderProblem::NotAFolder) => Some("gui-folder-not-a-folder"),
-            Err(FolderProblem::Overlaps(_)) => Some("gui-folder-overlaps"),
-            Err(_) => Some("gui-folder-error"),
+        let count = match self.folder_verdict(folder, Some(&old)) {
+            Ok(count) => count,
+            Err(text) => {
+                self.toast(&text);
+                return;
+            }
         };
-        if let Some(key) = problem {
-            self.toast(&self.t(key));
-            return;
+        let mut body = self.message(
+            &Message::new("gui-change-body")
+                .arg("folder", Value::Text(folder.display().to_string())),
+        );
+        if count > 0 {
+            body.push_str("\n\n");
+            body.push_str(&self.not_empty_text(count));
         }
+        let old_exists = old.is_dir() && !protected_folder(&old, &home(), &user_dirs());
+        let mut answers = vec![("keep", "gui-change-keep-old", false)];
+        if old_exists {
+            body.push_str("\n\n");
+            body.push_str(&self.message(
+                &Message::new("gui-change-old").arg("old", Value::Text(old.display().to_string())),
+            ));
+            answers.push(("trash", "gui-change-trash-old", true));
+        }
+        let folder = folder.to_path_buf();
+        let row = row.clone();
+        self.confirm(
+            &self.t("gui-change-heading"),
+            &body,
+            &answers,
+            move |this, answer| {
+                if answer == "keep" || answer == "trash" {
+                    this.apply_folder_change(&folder, &old, answer == "trash", &row);
+                }
+            },
+        );
+    }
+
+    fn apply_folder_change(
+        self: &Rc<Self>,
+        folder: &Path,
+        old: &Path,
+        trash_old: bool,
+        row: &adw::ActionRow,
+    ) {
         let status = Status::load(&self.paths.status);
         let was_paused = self.paused.get();
         self.daemon.borrow_mut().stop(status.as_ref());
+        let resume = |this: &Rc<Self>| {
+            if !was_paused {
+                this.start_daemon();
+            }
+            this.tick();
+        };
+        if let Err(text) = self.empty_into_trash(folder) {
+            self.toast(&text);
+            resume(self);
+            return;
+        }
         let saved = std::fs::create_dir_all(folder).and_then(|()| {
             Settings {
                 folder: Some(folder.to_path_buf()),
@@ -754,9 +915,7 @@ impl App {
         });
         if let Err(e) = saved {
             self.toast(&format!("{}: {e}", self.t("gui-folder-error")));
-            if !was_paused {
-                self.start_daemon();
-            }
+            resume(self);
             return;
         }
         let db = self.paths.state_db.as_os_str().to_owned();
@@ -768,11 +927,15 @@ impl App {
         let _ = std::fs::remove_file(&self.paths.status);
         *self.folder.borrow_mut() = folder.to_path_buf();
         row.set_subtitle(&folder.to_string_lossy());
-        self.toast(&self.t("gui-folder-changed"));
-        if !was_paused {
-            self.start_daemon();
+        let mut note = self.t("gui-folder-changed");
+        if trash_old && let Err(e) = gio::File::for_path(old).trash(gio::Cancellable::NONE) {
+            note = self.message(
+                &Message::new("gui-folder-trash-failed")
+                    .arg("detail", Value::Text(format!("{}: {e}", old.display()))),
+            );
         }
-        self.tick();
+        self.toast(&note);
+        resume(self);
     }
 
     fn start_daemon(&self) {
@@ -941,4 +1104,26 @@ impl App {
             Some(State::Starting) | None => (self.t("gui-state-starting"), String::new()),
         }
     }
+}
+
+fn home() -> PathBuf {
+    glib::home_dir()
+}
+
+/// The user's standard folders (Documents, Desktop, …), never emptied.
+fn user_dirs() -> Vec<PathBuf> {
+    use glib::UserDirectory as U;
+    [
+        U::Desktop,
+        U::Documents,
+        U::Downloads,
+        U::Music,
+        U::Pictures,
+        U::PublicShare,
+        U::Templates,
+        U::Videos,
+    ]
+    .into_iter()
+    .filter_map(glib::user_special_dir)
+    .collect()
 }
