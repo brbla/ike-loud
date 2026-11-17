@@ -44,10 +44,13 @@ done
 # Absolute paths: ~/.local/bin need not be on the PATH of the session.
 sed "s|^ExecStart=.*|ExecStart=$BIN/ikeloud-daemon|" packaging/systemd/ikeloud.service \
     | install -Dm644 /dev/stdin "$SERVICE"
-sed "s|^Exec=ikeloud-gui|Exec=$BIN/ikeloud-gui|" packaging/desktop/io.github.brbla.IkeLoud.desktop \
-    | install -Dm644 /dev/stdin "$MENU"
-sed "s|^Exec=ikeloud-gui|Exec=$BIN/ikeloud-gui|" packaging/desktop/io.github.brbla.IkeLoud-autostart.desktop \
-    | install -Dm644 /dev/stdin "$AUTOSTART"
+# The icon by its full path: menus and the window overview then need no
+# icon theme lookup, which caches (GTK's, Plasma's) can hide.
+ICON="$DATA/icons/hicolor/scalable/apps/io.github.brbla.IkeLoud.svg"
+for entry in "io.github.brbla.IkeLoud.desktop:$MENU" "io.github.brbla.IkeLoud-autostart.desktop:$AUTOSTART"; do
+    sed -e "s|^Exec=ikeloud-gui|Exec=$BIN/ikeloud-gui|" -e "s|^Icon=.*|Icon=$ICON|" \
+        "packaging/desktop/${entry%%:*}" | install -Dm644 /dev/stdin "${entry#*:}"
+done
 
 install -Dm644 packaging/icons/io.github.brbla.IkeLoud.svg \
     "$DATA/icons/hicolor/scalable/apps/io.github.brbla.IkeLoud.svg"
