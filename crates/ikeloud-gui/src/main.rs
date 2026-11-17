@@ -348,7 +348,11 @@ impl App {
         match (settings.folder, session) {
             (Some(folder), Some(_)) => {
                 *this.folder.borrow_mut() = folder;
-                this.start_daemon();
+                if settings.paused {
+                    this.paused.set(true);
+                } else {
+                    this.start_daemon();
+                }
                 this.show_status();
             }
             (None, Some(_)) => this.nav.replace(this.folder_page()),
@@ -1448,6 +1452,16 @@ impl App {
 
     fn start_daemon(&self) {
         self.paused.set(false);
+        // Starting means syncing again: a remembered pause ends (the daemon
+        // would otherwise exit at once).
+        let settings = Settings::load(&self.paths.settings).unwrap_or_default();
+        if settings.paused {
+            let _ = Settings {
+                paused: false,
+                ..settings
+            }
+            .save(&self.paths.settings);
+        }
         let status = Status::load(&self.paths.status);
         let running = self.daemon.borrow_mut().running(status.as_ref());
         if !running {
@@ -1461,12 +1475,19 @@ impl App {
     }
 
     fn toggle_pause(self: &Rc<Self>) {
-        if self.paused.get() {
-            self.start_daemon();
-        } else {
+        let pause = !self.paused.get();
+        // Remembered: a pause lasts across restarts and logins.
+        let _ = Settings {
+            paused: pause,
+            ..Settings::load(&self.paths.settings).unwrap_or_default()
+        }
+        .save(&self.paths.settings);
+        if pause {
             let status = Status::load(&self.paths.status);
             self.daemon.borrow_mut().stop(status.as_ref());
             self.paused.set(true);
+        } else {
+            self.start_daemon();
         }
         self.tick();
     }
