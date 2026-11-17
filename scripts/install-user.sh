@@ -25,6 +25,7 @@ AUTOSTART="$CONF/autostart/io.github.brbla.IkeLoud.desktop"
 if [ "${1:-}" = "--uninstall" ]; then
     systemctl --user disable --now ikeloud.service 2>/dev/null || true
     rm -f "$SERVICE" "$MENU" "$AUTOSTART" \
+        "$DATA/icons/hicolor/scalable/apps/io.github.brbla.IkeLoud.svg" \
         "$BIN/ikeloud-gui" "$BIN/ikeloud-daemon" "$BIN/ikeloud-cli"
     systemctl --user daemon-reload
     echo "ike loud removed (settings, session and the synced folder stay)."
@@ -48,8 +49,16 @@ sed "s|^Exec=ikeloud-gui|Exec=$BIN/ikeloud-gui|" packaging/desktop/io.github.brb
 sed "s|^Exec=ikeloud-gui|Exec=$BIN/ikeloud-gui|" packaging/desktop/io.github.brbla.IkeLoud-autostart.desktop \
     | install -Dm644 /dev/stdin "$AUTOSTART"
 
+install -Dm644 packaging/icons/io.github.brbla.IkeLoud.svg \
+    "$DATA/icons/hicolor/scalable/apps/io.github.brbla.IkeLoud.svg"
+
 systemctl --user daemon-reload
 systemctl --user enable ikeloud.service >/dev/null
 command -v update-desktop-database >/dev/null && update-desktop-database "$DATA/applications" || true
+# Menus look icons up through caches; a cache older than the new icon hides
+# it. The user's hicolor folder has no index.theme, so gtk-update-icon-cache
+# cannot rebuild its cache there: remove a stale one (lookups then scan).
+rm -f "$DATA/icons/hicolor/icon-theme.cache"
+command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 >/dev/null 2>&1 || true
 
 echo "ike loud installed: start it from the menu (or run $BIN/ikeloud-gui)."
