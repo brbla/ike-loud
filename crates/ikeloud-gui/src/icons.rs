@@ -186,4 +186,12 @@ mod tests {
             assert!(badge.icon_name().starts_with(APP_ID));
         }
     }
+
+    #[test]
+    fn packaged_icon_is_the_app_icon() {
+        // packaging/icons/ is what the install script and packages install
+        // for menus before the app ever ran; it must be the app's icon.
+        let packaged = include_str!("../../../packaging/icons/io.github.brbla.IkeLoud.svg");
+        assert_eq!(packaged, app_svg(), "regenerate packaging/icons from app_svg()");
+    }
 }
