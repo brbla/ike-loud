@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 use ikeloud_local::{HashCache, LocalDisk, ScanError, Skipped, scan_with};
 use ikeloud_safety::{
     Action, BRAKE_WINDOW, Context, Decision, DeferredAction, LocalFolderState,
-    MassChangeConfirmation, RecentChanges, Rejection, RelPath, assess,
+    MassChangeConfirmation, Mode, RecentChanges, Rejection, RelPath, assess,
 };
 use ikeloud_state::{BaseChange, JournalEntry, JournalKind, StateDb, StateError};
 use ikeloud_sync::names::key;
@@ -62,6 +62,9 @@ pub struct SyncSetup<'a> {
     /// Names conflict copies: `(path, n)` → the name (translated, see
     /// `ikeloud_i18n`), `None` if the translation gives no usable name.
     pub conflict_name: &'a dyn Fn(&RelPath, u32) -> Option<RelPath>,
+    /// Two-way, or read-only: the safety layer then defers every server
+    /// write (milestone 1, first download, settings).
+    pub mode: Mode,
 }
 
 /// Runs one sync against `remote`: [`start_run`], then
@@ -161,6 +164,7 @@ pub fn start_run(
         .map(|f| (f.path.clone(), f.etag.clone()))
         .collect();
     context.settle_time = settle_time;
+    context.mode = setup.mode;
     context.recent = recent_changes(db, now)?;
     context.confirmation = confirmation;
 

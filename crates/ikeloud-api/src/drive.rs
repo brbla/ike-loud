@@ -11,13 +11,13 @@
 //! - a download asks `docws` for a signed URL, then reads the content from
 //!   `cvws.icloud-content.com`.
 
-use std::io::Write;
+use std::io::{ErrorKind, Read, Write};
 
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::client::{ApiError, Client};
-use crate::http::{Method, Transport};
+use crate::http::{Method, Transport, TransportError};
 
 /// Drive id of the root folder.
 pub const ROOT: &str = "FOLDER::com.apple.CloudDocs::root";
@@ -164,8 +164,11 @@ impl<T: Transport> Client<T> {
         })
     }
 
-    /// Downloads a file into `out`; returns the number of bytes written.
-    pub fn download(&mut self, item: &Item, out: &mut dyn Write) -> Result<u64, ApiError> {
+    /// Opens a file for reading. The stream fails with
+    /// [`std::io::ErrorKind::UnexpectedEof`] or [`std::io::ErrorKind::InvalidData`]
+    /// when the content is shorter or longer than the listing says, so a
+    /// broken transfer never looks like a complete file.
+    pub fn open_download(&mut self, item: &Item) -> Result<Box<dyn Read + Send>, ApiError> {
         let account = self.account().ok_or(ApiError::NotSignedIn)?.clone();
         let url = format!(
             "{}/ws/com.apple.CloudDocs/download/by_id?document_id={}&dsid={}",
@@ -179,17 +182,55 @@ impl<T: Transport> Client<T> {
                 call: "download/by_id",
                 what: "no data token".to_string(),
             })?;
-        let mut response = self.web_stream(&token.url)?;
-        let written = std::io::copy(&mut response.body, out)
-            .map_err(|e| ApiError::Transport(crate::http::TransportError::Io(e.to_string())))?;
-        if let Some(size) = item.size
-            && size != written
-        {
-            return Err(ApiError::Malformed {
+        let response = self.web_stream(&token.url)?;
+        Ok(match item.size {
+            Some(size) => Box::new(Exact {
+                inner: response.body,
+                left: size,
+            }),
+            None => response.body,
+        })
+    }
+
+    /// Downloads a file into `out`; returns the number of bytes written.
+    pub fn download(&mut self, item: &Item, out: &mut dyn Write) -> Result<u64, ApiError> {
+        let mut content = self.open_download(item)?;
+        std::io::copy(&mut content, out).map_err(|e| match e.kind() {
+            ErrorKind::UnexpectedEof | ErrorKind::InvalidData => ApiError::Malformed {
                 call: "download",
-                what: format!("got {written} bytes, the listing says {size}"),
-            });
+                what: e.to_string(),
+            },
+            _ => ApiError::Transport(TransportError::Io(e.to_string())),
+        })
+    }
+}
+
+/// A reader that must yield exactly `left` more bytes.
+struct Exact {
+    inner: Box<dyn Read + Send>,
+    left: u64,
+}
+
+impl Read for Exact {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
         }
-        Ok(written)
+        let n = self.inner.read(buf)?;
+        let got = u64::try_from(n).unwrap_or(u64::MAX);
+        if n == 0 && self.left > 0 {
+            return Err(std::io::Error::new(
+                ErrorKind::UnexpectedEof,
+                format!("the content ended {} bytes early", self.left),
+            ));
+        }
+        if got > self.left {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "the content is longer than the listing says",
+            ));
+        }
+        self.left -= got;
+        Ok(n)
     }
 }

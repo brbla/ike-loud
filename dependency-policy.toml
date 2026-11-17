@@ -31,7 +31,9 @@ external = ["unicode-normalization"]
 dev = ["ikeloud-testkit"]
 
 [crates.ikeloud-daemon]
-internal = ["ikeloud-api", "ikeloud-sync", "ikeloud-safety", "ikeloud-local", "ikeloud-state", "ikeloud-hash"]
+# ikeloud-i18n: translated names of conflict copies; ikeloud-config: paths,
+# settings and the status file shared with the GUI.
+internal = ["ikeloud-api", "ikeloud-sync", "ikeloud-safety", "ikeloud-local", "ikeloud-state", "ikeloud-hash", "ikeloud-i18n", "ikeloud-config"]
 external = []
 dev = ["ikeloud-testkit"]
 
@@ -41,7 +43,7 @@ external = []
 dev = []
 
 [crates.ikeloud-cli]
-internal = ["ikeloud-api"]
+internal = ["ikeloud-api", "ikeloud-config"]
 external = []
 dev = []
 
@@ -79,5 +81,12 @@ dev = []
 [crates.ikeloud-testkit]
 test_only = true
 internal = ["ikeloud-safety", "ikeloud-sync"]
+external = []
+dev = []
+
+# Paths, settings and the status file shared by the daemon, the GUI and the
+# CLI. Standard library only.
+[crates.ikeloud-config]
+internal = []
 external = []
 dev = []

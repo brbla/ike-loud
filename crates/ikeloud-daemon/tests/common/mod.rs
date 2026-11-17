@@ -311,6 +311,7 @@ impl Fixture {
             ),
             settle_time: DEFAULT_SETTLE_TIME,
             conflict_name: &copy_name,
+            mode: ikeloud_safety::Mode::Full,
         };
         // A minute from now: every file the test wrote counts as settled.
         let now = SystemTime::now() + Duration::from_secs(60);

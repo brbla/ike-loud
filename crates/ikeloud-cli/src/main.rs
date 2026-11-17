@@ -6,20 +6,20 @@
 //! ikeloud-cli get </path> <file>      download a file
 //! ```
 //!
-//! The session is kept in `$XDG_STATE_HOME/ikeloud/cli-session.json`
-//! (mode 0600) until the daemon keeps it in the keyring. It holds cookies and
-//! the trust token, never the password.
+//! The session is the one the app and the daemon use
+//! (`$XDG_STATE_HOME/ikeloud/session.json`, mode 0600) until it moves to the
+//! keyring. It holds cookies and the trust token, never the password.
 
 // A command-line tool talks on stdout and stderr.
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, BufRead, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ikeloud_api::{ApiError, Client, HttpsTransport, Item, Kind, ROOT, SavedSession, SignIn};
+use ikeloud_config::{Paths, write_private};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -50,28 +50,11 @@ fn main() -> ExitCode {
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn session_path() -> Result<PathBuf> {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-        .ok_or("neither XDG_STATE_HOME nor HOME is set")?;
-    Ok(base.join("ikeloud").join("cli-session.json"))
+    Ok(Paths::from_env()?.session)
 }
 
 fn save(client: &Client<HttpsTransport>) -> Result<()> {
-    let path = session_path()?;
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("tmp");
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)?;
-    file.write_all(client.saved().to_json().as_bytes())?;
-    file.sync_all()?;
-    fs::rename(&tmp, &path)?;
+    write_private(&session_path()?, client.saved().to_json().as_bytes())?;
     Ok(())
 }
 

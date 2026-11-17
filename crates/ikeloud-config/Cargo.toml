@@ -1,0 +1,13 @@
+[package]
+name = "ikeloud-config"
+description = "Where ike loud keeps its settings, session and status; shared by the daemon, the GUI and the CLI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

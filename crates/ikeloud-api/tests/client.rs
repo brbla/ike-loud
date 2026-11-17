@@ -403,6 +403,17 @@ fn download() {
         Err(ApiError::Malformed { .. })
     ));
 
+    fake.reply(
+        200,
+        &[],
+        r#"{"data_token": {"url": "https://cvws.icloud-content.com/B/abc"}}"#,
+    )
+    .reply(200, &[], "hello world and more");
+    assert!(matches!(
+        client.download(&item, &mut Vec::new()),
+        Err(ApiError::Malformed { .. })
+    ));
+
     fake.reply(200, &[], "{}");
     assert!(matches!(
         client.download(&item, &mut Vec::new()),

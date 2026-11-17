@@ -358,8 +358,9 @@ fn percent_encode(path: &Path) -> String {
 
 /// `DeletionDate=` (YYYY-MM-DDThh:mm:ss). The specification asks for local
 /// time; the standard library knows no time zones, so this is UTC: a file
-/// manager may show the deletion a few hours off.
-fn trash_date(now: SystemTime) -> String {
+/// manager may show the deletion a few hours off. Also the date in the name
+/// of a conflict copy.
+pub fn trash_date(now: SystemTime) -> String {
     let secs = now
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
