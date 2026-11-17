@@ -131,6 +131,24 @@ pub fn app_svg() -> String {
     }
 }
 
+/// Puts the app icon into the user's icon theme folder
+/// (`$XDG_DATA_HOME/icons/hicolor/scalable/apps`), where menus and the
+/// desktop file find it. Kept up to date on every start.
+pub fn install_app_icon(data_dir: &Path) -> std::io::Result<()> {
+    let dir = data_dir
+        .join("icons")
+        .join("hicolor")
+        .join("scalable")
+        .join("apps");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{APP_ID}.svg"));
+    let svg = app_svg();
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(svg.as_str()) {
+        std::fs::write(path, svg)?;
+    }
+    Ok(())
+}
+
 /// Writes all icons under `dir` (flat, and as a hicolor theme, so either
 /// lookup finds them). Returns the folder to give as `IconThemePath`.
 pub fn install(dir: &Path) -> std::io::Result<PathBuf> {

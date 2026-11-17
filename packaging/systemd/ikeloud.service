@@ -7,6 +7,10 @@ Documentation=https://github.com/brbla/ike-loud
 [Service]
 ExecStart=%h/.local/bin/ikeloud-daemon
 Restart=on-failure
+RestartSec=30
+# 2: not set up yet, 3: signed out. Both wait for the app (setup, sign-in),
+# which starts the service again; restarting would only repeat the exit.
+RestartPreventExitStatus=2 3
 # No core dumps: after a crash, nothing from the sign-in (SRP secrets,
 # session tokens) may end up on disk (docs/rozhodnuti/0013, 0016). The
 # daemon cannot do this itself: prctl/setrlimit need unsafe code, which the
