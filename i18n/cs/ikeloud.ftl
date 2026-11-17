@@ -130,7 +130,7 @@ gui-state-offline-detail = Zkusí to znovu samo.
 gui-state-paused-detail = Dokud nebudete pokračovat, nic se nestahuje.
 gui-settings = Nastavení
 gui-folder-change = Změnit…
-gui-folder-change-description = Kam se stahuje iCloud Drive. Nová složka musí být nová nebo prázdná; ve staré soubory zůstanou.
+gui-folder-change-description = Kam se stahuje iCloud Drive. Při změně se aplikace zeptá, co s obsahem nové i staré složky.
 gui-folder-changed = Složka je změněná. iCloud Drive se do ní stahuje.
 gui-account-section = Účet
 gui-folder-absolute = Napište celou cestu, např. ~/iCloud nebo /home/vy/iCloud.
@@ -156,4 +156,6 @@ gui-local-pending =
         [few] { $count } místní změny se na iCloud nenahrají: ike loud z iCloudu zatím jen čte.
        *[other] { $count } místních změn se na iCloud nenahraje: ike loud z iCloudu zatím jen čte.
     }
+gui-back = Zpět
+gui-apply = Použít
 gui-read-only = Zatím jen čtení: na iCloud se nikdy nic nezapíše.

@@ -1,13 +1,18 @@
-# 0022: Aplikace v GTK 4, ikona v liště a démon jen pro čtení
+# 0022: Aplikace v čistém GTK 4, ikona v liště a démon jen pro čtení
 
 Datum: 2026-11-17 · Milník 1
 
 ## Rozhodnutí
 
-- **GTK 4 + libadwaita** (`gtk4` 0.11, `libadwaita` 0.9; rozhodnutí
-  vlastníka 16. 11.). Požadavek na verze: GTK 4.12 a libadwaita 1.5,
-  tedy co má Ubuntu 24.04 v CI. Novější widgety (např. `AdwSpinner`) se
-  nepoužívají.
+- **Čisté GTK 4 bez libadwaita** (`gtk4` 0.11, požadavek GTK 4.12 kvůli
+  Ubuntu 24.04 v CI). Původně libadwaita (16. 11.); 17. 11. vlastník
+  rozhodl, že aplikace má vypadat systémově. libadwaita motiv systému
+  záměrně ignoruje a na KDE vypadá jako GNOME; čisté GTK bere motiv
+  systému (Breeze na KDE, Adwaita na GNOME). Výběr složky je dialog
+  systému přes portál (KDE na Plasmě, GNOME na GNOME), potvrzení jsou
+  `gtk::AlertDialog` v motivu systému. Titulek okna kreslí na Waylandu
+  GTK (ve stylu motivu), ne KWin. Plně nativní KDE by znamenalo druhé
+  rozhraní v Qt: ne.
 - **Ikona v liště vlastní nad GIO D-Bus** (`tray.rs`):
   StatusNotifierItem a menu `com.canonical.dbusmenu`. Knihovna `ksni`
   by přinesla `zbus` a asynchronní běhové prostředí; GIO je v GTK
@@ -60,9 +65,9 @@ Datum: 2026-11-17 · Milník 1
 
 ## CI
 
-- Úloha `check` instaluje `libgtk-4-dev` a `libadwaita-1-dev` před
-  výpočtem klíče cache; klíč obsahuje verze a příznaky z `pkg-config`
-  (`gtk4`, `libadwaita-1`) a proměnné `SYSTEM_DEPS_*` (SCHEMA 5).
-- `deny.toml` povoluje druhou verzi `system-deps` (7.0.8): žádá ji
-  `libadwaita-sys` 0.9.2, jen při sestavení.
-- Nových 53 knihoven ve výjimkách `cargo vet` (0007).
+- Úloha `check` instaluje `libgtk-4-dev` před výpočtem klíče cache; klíč
+  obsahuje verzi a příznaky `gtk4` z `pkg-config` a proměnné
+  `SYSTEM_DEPS_*` (SCHEMA 6).
+- Nových 50 knihoven ve výjimkách `cargo vet` (0007). S libadwaita
+  odešly `libadwaita`, `libadwaita-sys` a druhá verze `system-deps`
+  (a její výjimka v `deny.toml`).

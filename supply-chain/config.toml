@@ -302,16 +302,6 @@ version = "1.0.19"
 criteria = "safe-to-deploy"
 notes = "iCloud web client (ikeloud-api/src/http.rs, client.rs), 2026-11-16: HTTPS over ureq + rustls (ring), JSON. Not audited yet; we trust nobody (docs/rozhodnuti/0007, 0021)."
 
-[[exemptions.libadwaita]]
-version = "0.9.2"
-criteria = "safe-to-deploy"
-notes = "GUI (ikeloud-gui), 2026-11-17: GTK 4 and libadwaita bindings (gtk-rs) and their build helpers. Not audited yet; we trust nobody (docs/rozhodnuti/0007, 0022)."
-
-[[exemptions.libadwaita-sys]]
-version = "0.9.2"
-criteria = "safe-to-deploy"
-notes = "GUI (ikeloud-gui), 2026-11-17: GTK 4 and libadwaita bindings (gtk-rs) and their build helpers. Not audited yet; we trust nobody (docs/rozhodnuti/0007, 0022)."
-
 [[exemptions.libc]]
 version = "0.2.191"
 criteria = "safe-to-deploy"
@@ -500,11 +490,6 @@ notes = "iCloud web client (ikeloud-api/src/http.rs, client.rs), 2026-11-16: HTT
 [[exemptions.syn]]
 version = "3.0.10"
 criteria = "safe-to-deploy"
-
-[[exemptions.system-deps]]
-version = "7.0.8"
-criteria = "safe-to-deploy"
-notes = "GUI (ikeloud-gui), 2026-11-17: GTK 4 and libadwaita bindings (gtk-rs) and their build helpers. Not audited yet; we trust nobody (docs/rozhodnuti/0007, 0022)."
 
 [[exemptions.system-deps]]
 version = "9.0.1"

@@ -27,10 +27,6 @@ allow = [
 
 [bans]
 multiple-versions = "deny"
-# libadwaita-sys 0.9.2 still asks for system-deps 7, the other GTK -sys
-# crates for 9. Build-time only (finds the system libraries through
-# pkg-config); nothing of it runs in the app. Drop when libadwaita-sys moves.
-skip = [{ crate = "system-deps@7.0.8", reason = "libadwaita-sys 0.9.2 pins it; build time only" }]
 wildcards = "deny"
 # Internal crates are path dependencies without a version; the workspace is not published.
 allow-wildcard-paths = true

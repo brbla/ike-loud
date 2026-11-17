@@ -127,7 +127,7 @@ gui-state-offline-detail = It will try again on its own.
 gui-state-paused-detail = Nothing is downloaded until you resume.
 gui-settings = Settings
 gui-folder-change = Change…
-gui-folder-change-description = Where iCloud Drive is downloaded. A new folder must be new or empty; the old one keeps its files.
+gui-folder-change-description = Where iCloud Drive is downloaded. On a change the app asks what to do with the content of the new and the old folder.
 gui-folder-changed = The folder changed. iCloud Drive is being downloaded into it.
 gui-account-section = Account
 gui-folder-absolute = Type the whole path, e.g. ~/iCloud or /home/you/iCloud.
@@ -151,4 +151,6 @@ gui-local-pending =
         [one] 1 local change is not uploaded: for now ike loud only reads from iCloud.
        *[other] { $count } local changes are not uploaded: for now ike loud only reads from iCloud.
     }
+gui-back = Back
+gui-apply = Apply
 gui-read-only = Read-only for now: nothing is ever written to iCloud.
