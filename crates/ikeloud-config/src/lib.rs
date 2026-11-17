@@ -315,6 +315,17 @@ pub fn check_folder(folder: &Path, paths: &Paths) -> Result<(), FolderProblem> {
     }
 }
 
+/// Whether a folder must never be emptied to make room for iCloud: the
+/// root, the home folder, the user's standard folders (Documents, Desktop,
+/// …) and everything that contains one of them. One wrong click in the folder
+/// dialog must not send the user's documents to the trash.
+pub fn protected_folder(folder: &Path, home: &Path, user_dirs: &[PathBuf]) -> bool {
+    let folder = folder.components().collect::<PathBuf>();
+    folder.parent().is_none()
+        || home.starts_with(&folder)
+        || user_dirs.iter().any(|dir| dir.starts_with(&folder))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,5 +430,31 @@ mod tests {
         assert_eq!(p.session, Path::new("/s/ikeloud/session.json"));
         assert_eq!(p.status, Path::new("/s/ikeloud/status"));
         assert_eq!(p.trash, Path::new("/d/Trash"));
+    }
+
+    #[test]
+    fn protected_folders() {
+        let home = Path::new("/home/u");
+        let dirs = [
+            PathBuf::from("/home/u/Documents"),
+            PathBuf::from("/home/u/Desktop"),
+        ];
+        for p in [
+            "/",
+            "/home",
+            "/home/u",
+            "/home/u/",
+            "/home/u/Documents",
+            "/home/u/Desktop",
+        ] {
+            assert!(protected_folder(Path::new(p), home, &dirs), "{p}");
+        }
+        for p in [
+            "/home/u/iCloud",
+            "/home/u/Documents/iCloud",
+            "/mnt/disk/icloud",
+        ] {
+            assert!(!protected_folder(Path::new(p), home, &dirs), "{p}");
+        }
     }
 }

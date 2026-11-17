@@ -98,7 +98,6 @@ gui-folder-description = Do této složky se stáhne iCloud Drive. Musí být no
 gui-folder = Složka
 gui-folder-choose = Vybrat…
 gui-folder-done = Začít stahovat
-gui-folder-not-empty = Složka není prázdná. Vyberte prázdnou nebo novou.
 gui-folder-not-a-folder = Tohle je soubor, ne složka.
 gui-folder-overlaps = Tato složka patří samotnému ike loud. Vyberte jinou.
 gui-folder-error = Tuto složku nejde použít.
@@ -134,4 +133,20 @@ gui-folder-change = Změnit…
 gui-folder-change-description = Kam se stahuje iCloud Drive. Nová složka musí být nová nebo prázdná; ve staré soubory zůstanou.
 gui-folder-changed = Složka je změněná. iCloud Drive se do ní stahuje.
 gui-account-section = Účet
+gui-cancel = Zrušit
+gui-folder-will-be-emptied =
+    { $count ->
+        [one] Ve složce je 1 položka. Nejdřív se přesune do koše, aby ve složce byl jen iCloud.
+        [few] Ve složce jsou { $count } položky. Nejdřív se přesunou do koše, aby ve složce byl jen iCloud.
+       *[other] Ve složce je { $count } položek. Nejdřív se přesunou do koše, aby ve složce byl jen iCloud.
+    }
+gui-folder-trash-and-start = Přesunout do koše a začít
+gui-folder-protected = Tuto složku nejde pro iCloud vyprázdnit: je to domovská složka nebo jedna z vašich běžných složek (Dokumenty, Plocha…), nebo nějakou obsahuje. Vyberte novou složku.
+gui-folder-nested = Nová složka nemůže být uvnitř současné ani ji obsahovat.
+gui-folder-trash-failed = Přesun do koše se nepovedl: { $detail }
+gui-change-heading = Změnit složku?
+gui-change-body = iCloud Drive se znovu celý stáhne do složky { $folder }.
+gui-change-old = Současná složka { $old } může zůstat, jak je, nebo jít do koše (odtud ji půjde obnovit).
+gui-change-keep-old = Změnit, starou ponechat
+gui-change-trash-old = Změnit, starou do koše
 gui-read-only = Zatím jen čtení: na iCloud se nikdy nic nezapíše.

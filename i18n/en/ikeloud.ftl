@@ -95,7 +95,6 @@ gui-folder-description = iCloud Drive will be downloaded into this folder. It mu
 gui-folder = Folder
 gui-folder-choose = Choose…
 gui-folder-done = Start downloading
-gui-folder-not-empty = The folder is not empty. Choose an empty or a new one.
 gui-folder-not-a-folder = This is a file, not a folder.
 gui-folder-overlaps = This folder belongs to ike loud itself. Choose another one.
 gui-folder-error = The folder cannot be used.
@@ -131,4 +130,19 @@ gui-folder-change = Change…
 gui-folder-change-description = Where iCloud Drive is downloaded. A new folder must be new or empty; the old one keeps its files.
 gui-folder-changed = The folder changed. iCloud Drive is being downloaded into it.
 gui-account-section = Account
+gui-cancel = Cancel
+gui-folder-will-be-emptied =
+    { $count ->
+        [one] The folder holds 1 item. It goes to the trash first, so that only iCloud is in the folder.
+       *[other] The folder holds { $count } items. They go to the trash first, so that only iCloud is in the folder.
+    }
+gui-folder-trash-and-start = Move to Trash and Start
+gui-folder-protected = This folder cannot be emptied for iCloud: it is your home folder or one of your standard folders (Documents, Desktop, …), or holds one. Choose a new folder.
+gui-folder-nested = The new folder cannot be inside the current one, nor hold it.
+gui-folder-trash-failed = Moving to the trash failed: { $detail }
+gui-change-heading = Change the folder?
+gui-change-body = iCloud Drive will be downloaded again, all of it, into { $folder }.
+gui-change-old = The current folder { $old } can stay as it is or go to the trash (you can restore it from there).
+gui-change-keep-old = Change, Keep the Old One
+gui-change-trash-old = Change, Old One to Trash
 gui-read-only = Read-only for now: nothing is ever written to iCloud.
