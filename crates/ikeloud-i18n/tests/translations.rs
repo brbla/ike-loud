@@ -92,6 +92,63 @@ fn all_messages() -> Vec<Message> {
                 .arg("number", Value::Number(number)),
         );
     }
+    // The app window and the setup (ikeloud-gui).
+    for key in [
+        "gui-signin-title",
+        "gui-signin-description",
+        "gui-account",
+        "gui-password",
+        "gui-signin",
+        "gui-code-title",
+        "gui-code",
+        "gui-verify",
+        "gui-resend",
+        "gui-code-sent",
+        "gui-folder-title",
+        "gui-folder-description",
+        "gui-folder",
+        "gui-folder-choose",
+        "gui-folder-done",
+        "gui-folder-not-empty",
+        "gui-folder-not-a-folder",
+        "gui-folder-overlaps",
+        "gui-folder-error",
+        "gui-error-credentials",
+        "gui-error-code",
+        "gui-error-too-many",
+        "gui-error-no-phone",
+        "gui-error-offline",
+        "gui-error-drive-not-set-up",
+        "gui-error-drive-unavailable",
+        "gui-open-folder",
+        "gui-pause",
+        "gui-resume",
+        "gui-sign-out",
+        "gui-show",
+        "gui-quit",
+        "gui-state-starting",
+        "gui-state-idle",
+        "gui-state-syncing",
+        "gui-state-needs-confirmation",
+        "gui-state-signed-out",
+        "gui-state-offline",
+        "gui-state-error",
+        "gui-state-paused",
+        "gui-state-signed-out-detail",
+        "gui-state-offline-detail",
+        "gui-state-paused-detail",
+        "gui-read-only",
+    ] {
+        messages.push(Message::new(key));
+    }
+    messages.push(Message::new("gui-code-description").arg("phone", Value::Text("37".into())));
+    messages.push(Message::new("gui-error-other").arg("detail", Value::Text("x".into())));
+    messages.push(
+        Message::new("gui-state-idle-detail")
+            .arg("files", Value::Number(3))
+            .arg("downloaded", Value::Number(2)),
+    );
+    messages.push(Message::new("gui-state-syncing-detail").arg("downloaded", Value::Number(2)));
     messages
 }
 

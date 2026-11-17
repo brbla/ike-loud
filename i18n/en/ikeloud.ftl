@@ -76,3 +76,54 @@ conflict-copy-name =
         [1] Linux conflict { $date }
        *[other] Linux conflict { $date } { $number }
     }){ $extension }
+
+## App window and setup (ikeloud-gui)
+
+gui-signin-title = Sign in to iCloud
+gui-signin-description = Use your Apple Account. ike loud keeps no password: it remembers the sign-in, not the password.
+gui-account = Apple Account (email)
+gui-password = Password
+gui-signin = Sign In
+gui-code-title = Verification code
+gui-code-description = Apple sent a six-digit code to the phone number ending { $phone }.
+gui-code = Code
+gui-verify = Verify
+gui-resend = Send a new code
+gui-code-sent = A new code is on its way.
+gui-folder-title = Where to keep your files
+gui-folder-description = iCloud Drive will be downloaded into this folder. It must be new or empty: ike loud never mixes your iCloud with files that are already there.
+gui-folder = Folder
+gui-folder-choose = Choose…
+gui-folder-done = Start downloading
+gui-folder-not-empty = The folder is not empty. Choose an empty or a new one.
+gui-folder-not-a-folder = This is a file, not a folder.
+gui-folder-overlaps = This folder belongs to ike loud itself. Choose another one.
+gui-folder-error = The folder cannot be used.
+gui-error-credentials = Wrong Apple Account or password.
+gui-error-code = Wrong or expired code.
+gui-error-too-many = Too many attempts. Wait a while and try again.
+gui-error-no-phone = The Apple Account has no trusted phone number for the code.
+gui-error-offline = No connection to iCloud. Check the internet connection.
+gui-error-drive-not-set-up = iCloud Drive is not set up yet. Open it once at icloud.com, then sign in again.
+gui-error-drive-unavailable = This Apple Account has no iCloud Drive.
+gui-error-other = Sign-in failed: { $detail }
+gui-open-folder = Open Folder
+gui-pause = Pause
+gui-resume = Resume
+gui-sign-out = Sign Out
+gui-show = Show ike loud
+gui-quit = Quit
+gui-state-starting = Starting
+gui-state-idle = Up to date
+gui-state-syncing = Syncing
+gui-state-needs-confirmation = Waiting for your confirmation
+gui-state-signed-out = Signed out
+gui-state-offline = Offline
+gui-state-error = Needs attention
+gui-state-paused = Paused
+gui-state-idle-detail = Files on iCloud: { $files }. Downloaded since start: { $downloaded }.
+gui-state-syncing-detail = Downloaded since start: { $downloaded }.
+gui-state-signed-out-detail = The sign-in expired. Sign in again to continue.
+gui-state-offline-detail = It will try again on its own.
+gui-state-paused-detail = Nothing is downloaded until you resume.
+gui-read-only = Read-only for now: nothing is ever written to iCloud.

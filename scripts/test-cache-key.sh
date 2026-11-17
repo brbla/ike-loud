@@ -86,7 +86,7 @@ check "vendored crate added" different sh -c 'mkdir -p vendor/new-1.0.0 && echo 
 check "new workspace crate" different sh -c 'mkdir -p crates/new && echo "[package]" > crates/new/Cargo.toml'
 for var in RUSTFLAGS RUSTC_WRAPPER CARGO_INCREMENTAL CARGO_PROFILE_DEV_OPT_LEVEL CC CC_x86_64_unknown_linux_gnu \
     CFLAGS CFLAGS_x86_64_unknown_linux_gnu TARGET_CC HOST_CFLAGS CRATE_CC_NO_DEFAULTS AR LDFLAGS \
-    PKG_CONFIG_PATH LIBSQLITE3_FLAGS SQLITE3_LIB_DIR RING_PREGENERATE_ASM PERL_EXECUTABLE ImageOS; do
+    PKG_CONFIG_PATH LIBSQLITE3_FLAGS SQLITE3_LIB_DIR RING_PREGENERATE_ASM PERL_EXECUTABLE SYSTEM_DEPS_GTK4_NO_PKG_CONFIG ImageOS; do
     check "env $var" different export "$var=changed"
 done
 
@@ -109,7 +109,9 @@ rm "$FAKE/ar"; fake_tool ld "ld 0.0.0-fake"
 check "linker version" different export PATH="$FAKE:$PATH"
 rm "$FAKE/ld"; fake_tool ldd "ldd (fake libc) 0.0"
 check "C library version" different export PATH="$FAKE:$PATH"
-rm "$FAKE/ldd"
+rm "$FAKE/ldd"; fake_tool pkg-config "4.0.0-fake"
+check "GUI system libraries (pkg-config)" different export PATH="$FAKE:$PATH"
+rm "$FAKE/pkg-config"
 
 # The key of a passed mutation run (--mutants): every input of the run
 # changes it; code the safety layer does not use does not.
