@@ -13,19 +13,23 @@
 use std::cell::Cell;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::SystemTime;
 
 use ikeloud_api::{ApiError, Client, HttpsTransport, SavedSession};
-use ikeloud_config::{Paths, Settings, State, Status as FileStatus, write_private};
+use ikeloud_config::{
+    Paths, PendingChange, PendingChanges, Request, Settings, State, Status as FileStatus,
+    write_private,
+};
 use ikeloud_daemon::{
-    Daemon, Download, ICloudRemote, Listing, Remote, RemoteError, RunOutcome, Status, Timing,
-    Written, spawn_watcher,
+    Daemon, Download, Event, ICloudRemote, Listing, Remote, RemoteError, RunOutcome, Status,
+    Timing, Written, spawn_watcher,
 };
 use ikeloud_i18n::{Translations, languages_from_env};
 use ikeloud_local::{LocalDisk, trash_date};
 use ikeloud_safety::{
-    ApprovedAction, DEFAULT_SETTLE_TIME, Mode, ReadOnlyReason, Rejection, RelPath,
+    ApprovedAction, ChangeKind, DEFAULT_SETTLE_TIME, MassChangeSummary, Mode, ReadOnlyReason,
+    Rejection, RelPath,
 };
 use ikeloud_state::StateDb;
 use ikeloud_sync::StopReason;
@@ -125,9 +129,28 @@ fn main() -> ExitCode {
     };
     let mut daemon = Daemon::new(setup, db, watches, Timing::DEFAULT);
     let status_path = paths.status.clone();
+    // A mass change waiting for the user, and the GUI's requests.
+    let waiting: Arc<Mutex<Option<(String, MassChangeSummary)>>> = Arc::new(Mutex::new(None));
+    spawn_requests(paths.request.clone(), events.clone(), Arc::clone(&waiting));
+    let pending_path = paths.pending.clone();
     let settings_path = paths.settings.clone();
     let mut on_status = |status: Status| {
         let (state, detail) = describe(&status);
+        match &status.outcome {
+            Ok(RunOutcome::Rejected(Rejection::MassChangeNeedsConfirmation(summary))) => {
+                let pending = pending_changes(summary);
+                let _ = pending.save(&pending_path);
+                if let Ok(mut w) = waiting.lock() {
+                    *w = Some((pending.id, summary.clone()));
+                }
+            }
+            _ => {
+                if let Ok(mut w) = waiting.lock() {
+                    *w = None;
+                }
+                let _ = std::fs::remove_file(&pending_path);
+            }
+        }
         if let Ok(RunOutcome::Ran(report)) = &status.outcome {
             pending.set(u64::try_from(report.deferred.len()).unwrap_or(u64::MAX));
             if first_download_complete(report) && !first_done.exists() {
@@ -150,6 +173,80 @@ fn main() -> ExitCode {
     let _keep = events;
     daemon.run(&mut remote, &receive, &mut on_status);
     ExitCode::SUCCESS
+}
+
+/// Takes the GUI's requests (a file, once a second) and turns them into
+/// events. A confirmation counts only for the mass change it names: the one
+/// the user saw.
+fn spawn_requests(
+    path: std::path::PathBuf,
+    events: mpsc::Sender<Event>,
+    waiting: Arc<Mutex<Option<(String, MassChangeSummary)>>>,
+) {
+    let _ = std::thread::Builder::new()
+        .name("ikeloud-requests".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let event = match Request::take(&path) {
+                    Some(Request::SyncNow) => Event::SyncNow,
+                    Some(Request::Confirm(id)) => {
+                        let confirmed = waiting.lock().ok().and_then(|w| {
+                            w.as_ref()
+                                .filter(|(current, _)| *current == id)
+                                .map(|(_, summary)| summary.confirm())
+                        });
+                        match confirmed {
+                            Some(c) => Event::Confirm(c),
+                            None => continue,
+                        }
+                    }
+                    None => continue,
+                };
+                if events.send(event).is_err() {
+                    return;
+                }
+            }
+        });
+}
+
+/// The mass change as the GUI shows it, with an id bound to exactly these
+/// changes (the files, their versions and destinations).
+fn pending_changes(summary: &MassChangeSummary) -> PendingChanges {
+    let mut seed = String::new();
+    let files = summary
+        .files
+        .iter()
+        .map(|change| {
+            seed.push_str(&format!(
+                "{:?}\u{0}{}\u{0}{:?}\u{0}{}\n",
+                change.kind,
+                change.path.as_str(),
+                change.to.as_ref().map(RelPath::as_str),
+                change.version
+            ));
+            PendingChange {
+                kind: match change.kind {
+                    ChangeKind::TrashRemote => "trash-remote",
+                    ChangeKind::OverwriteRemote => "overwrite-remote",
+                    ChangeKind::TrashLocal => "trash-local",
+                    ChangeKind::OverwriteLocal => "overwrite-local",
+                    ChangeKind::MoveRemote => "move-remote",
+                    ChangeKind::MoveLocal => "move-local",
+                }
+                .to_string(),
+                path: change.path.as_str().to_string(),
+                to: change.to.as_ref().map(|t| t.as_str().to_string()),
+            }
+        })
+        .collect();
+    PendingChanges {
+        id: ikeloud_hash::hex(&ikeloud_hash::sha256(&[seed.as_bytes()])),
+        destructive: summary.destructive(),
+        moves: summary.moves(),
+        total: summary.total,
+        files,
+    }
 }
 
 /// Two-way only after the first download and with uploads turned on.

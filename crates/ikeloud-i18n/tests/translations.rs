@@ -137,6 +137,14 @@ fn all_messages() -> Vec<Message> {
         "gui-state-offline-detail",
         "gui-state-paused-detail",
         "gui-read-only",
+        "gui-confirm-changes",
+        "gui-confirm-sent",
+        "gui-kind-trash-remote",
+        "gui-kind-overwrite-remote",
+        "gui-kind-trash-local",
+        "gui-kind-overwrite-local",
+        "gui-kind-move-remote",
+        "gui-kind-move-local",
         "gui-upload-toggle",
         "gui-upload-description",
         "gui-upload-confirm",
@@ -166,6 +174,7 @@ fn all_messages() -> Vec<Message> {
         messages
             .push(Message::new("gui-folder-will-be-emptied").arg("count", Value::Number(count)));
         messages.push(Message::new("gui-local-pending").arg("count", Value::Number(count)));
+        messages.push(Message::new("gui-more-changes").arg("count", Value::Number(count)));
     }
     messages.push(Message::new("gui-folder-trash-failed").arg("detail", Value::Text("x".into())));
     messages.push(Message::new("gui-change-body").arg("folder", Value::Text("/x".into())));
@@ -273,37 +282,37 @@ fn mass_change_question() {
             "cs",
             120,
             0,
-            "Synchronizace by během dne smazala nebo přepsala 120 souborů z 200. \
-             Než bude pokračovat, zkontrolujte prosím seznam souborů a potvrďte, že je to v pořádku.",
+            "Synchronizace by během dne smazala nebo přepsala 120 souborů. \
+             Synchronizovaných souborů je 200. Než bude pokračovat, zkontrolujte prosím seznam souborů a potvrďte, že je to v pořádku.",
         ),
         (
             "cs",
             0,
             3,
-            "Synchronizace by během dne přesunula 3 soubory z 200. \
-             Než bude pokračovat, zkontrolujte prosím seznam souborů a potvrďte, že je to v pořádku.",
+            "Synchronizace by během dne přesunula 3 soubory. \
+             Synchronizovaných souborů je 200. Než bude pokračovat, zkontrolujte prosím seznam souborů a potvrďte, že je to v pořádku.",
         ),
         (
             "cs",
             1,
             101,
-            "Synchronizace by během dne smazala nebo přepsala jeden soubor z 200. \
-             Synchronizace by během dne přesunula 101 souborů z 200. \
-             Než bude pokračovat, zkontrolujte prosím seznam souborů a potvrďte, že je to v pořádku.",
+            "Synchronizace by během dne smazala nebo přepsala jeden soubor. \
+             Synchronizace by během dne přesunula 101 souborů. \
+             Synchronizovaných souborů je 200. Než bude pokračovat, zkontrolujte prosím seznam souborů a potvrďte, že je to v pořádku.",
         ),
         (
             "en",
             51,
             0,
-            "Syncing would delete or overwrite 51 files out of 200 within a day. \
-             Please check the list of files and confirm before it continues.",
+            "Syncing would delete or overwrite 51 files within a day. \
+             200 files are synced. Please check the list of files and confirm before it continues.",
         ),
         (
             "en",
             0,
             1,
-            "Syncing would move one file out of 200 within a day. \
-             Please check the list of files and confirm before it continues.",
+            "Syncing would move one file within a day. \
+             200 files are synced. Please check the list of files and confirm before it continues.",
         ),
     ];
     for (code, changes, moves, expected) in cases {

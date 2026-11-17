@@ -38,15 +38,15 @@ rejected-mass-change =
             [one] jeden soubor
             [few] { $changes } soubory
            *[other] { $changes } souborů
-        } z { $total }.{" "}
+        }.{" "}
     }{ $moves ->
         [0] {""}
        *[other] Synchronizace by během dne přesunula { $moves ->
             [one] jeden soubor
             [few] { $moves } soubory
            *[other] { $moves } souborů
-        } z { $total }.{" "}
-    }Než bude pokračovat, zkontrolujte prosím seznam souborů a potvrďte, že je to v pořádku.
+        }.{" "}
+    }Synchronizovaných souborů je { $total }. Než bude pokračovat, zkontrolujte prosím seznam souborů a potvrďte, že je to v pořádku.
 rejected-icloud-space =
     Na iCloudu není dost místa: potřeba { $needed }, volno { $free }. Synchronizace stojí a nic se nemaže. Uvolněte místo na iCloudu nebo si ho dokupte.
 rejected-disk-space =
@@ -164,4 +164,13 @@ gui-upload-confirm = ike loud bude nahrávat nové a změněné soubory a smazan
 gui-upload-turn-on = Zapnout nahrávání
 gui-two-way = Oběma směry: změny ve složce se nahrávají na iCloud.
 gui-upload-waiting = Nahrávání je zapnuté; začne po dokončení prvního stažení.
+gui-confirm-changes = Provést změny
+gui-confirm-sent = Potvrzeno: změny se provedou při dalším běhu.
+gui-more-changes = … a dalších { $count }
+gui-kind-trash-remote = na iCloudu do Nedávno smazaných
+gui-kind-overwrite-remote = nová verze na iCloudu
+gui-kind-trash-local = v počítači do koše
+gui-kind-overwrite-local = nová verze v počítači (stará do historie)
+gui-kind-move-remote = přesun na iCloudu
+gui-kind-move-local = přesun v počítači
 gui-read-only = Jen čtení: na iCloud se nic nezapisuje. Nahrávání zapnete v nastavení.

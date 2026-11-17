@@ -27,6 +27,10 @@ pub struct Paths {
     pub state_db: PathBuf,
     /// Daemon status for the GUI.
     pub status: PathBuf,
+    /// A mass change waiting for the user's confirmation (daemon → GUI).
+    pub pending: PathBuf,
+    /// A request of the GUI to the daemon (confirm, sync now).
+    pub request: PathBuf,
     /// Local history: replaced versions kept for 30 days.
     pub history: PathBuf,
     /// The user's trash (freedesktop.org), where local deletions go.
@@ -59,6 +63,8 @@ impl Paths {
             session: state.join("session.json"),
             state_db: state.join("state.sqlite"),
             status: state.join("status"),
+            pending: state.join("pending-changes"),
+            request: state.join("request"),
             history: data.join("ikeloud").join("history"),
             trash: data.join("Trash"),
         }
@@ -239,6 +245,119 @@ impl Status {
             updated: number("updated"),
             pid: map.get("pid").and_then(|v| v.parse().ok()).unwrap_or(0),
         })
+    }
+}
+
+/// One change of a mass change, as the user sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingChange {
+    /// What happens: `trash-remote`, `overwrite-remote`, `trash-local`,
+    /// `overwrite-local`, `move-remote`, `move-local`.
+    pub kind: String,
+    /// The file.
+    pub path: String,
+    /// Where a move takes it.
+    pub to: Option<String>,
+}
+
+/// A mass change the safety layer stopped, waiting for the user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingChanges {
+    /// Identifies exactly this set of changes; a confirmation names it, so
+    /// it never covers a set the user has not seen.
+    pub id: String,
+    /// Files deleted or overwritten in the brake window, this plan included.
+    pub destructive: u64,
+    /// Files moved in the brake window, this plan included.
+    pub moves: u64,
+    /// Files synced.
+    pub total: u64,
+    /// The changes of this plan.
+    pub files: Vec<PendingChange>,
+}
+
+impl PendingChanges {
+    /// Writes the file: a header of `key=value` lines, an empty line, then
+    /// one change per line (`kind<TAB>path[<TAB>to]`).
+    pub fn save(&self, path: &Path) -> io::Result<()> {
+        let mut text = format!(
+            "id={}\ndestructive={}\nmoves={}\ntotal={}\n\n",
+            self.id, self.destructive, self.moves, self.total
+        );
+        for change in &self.files {
+            let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+            text.push_str(&clean(&change.kind));
+            text.push('\t');
+            text.push_str(&clean(&change.path));
+            if let Some(to) = &change.to {
+                text.push('\t');
+                text.push_str(&clean(to));
+            }
+            text.push('\n');
+        }
+        write_private(path, text.as_bytes())
+    }
+
+    /// Reads the file; `None` when there is none or it is unreadable.
+    pub fn load(path: &Path) -> Option<Self> {
+        let text = fs::read_to_string(path).ok()?;
+        let (head, body) = text.split_once("\n\n")?;
+        let map = parse(head);
+        let number = |key: &str| {
+            map.get(key)
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0)
+        };
+        let files = body
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split('\t');
+                Some(PendingChange {
+                    kind: parts.next()?.to_string(),
+                    path: parts.next()?.to_string(),
+                    to: parts.next().map(str::to_string),
+                })
+            })
+            .collect();
+        Some(Self {
+            id: map.get("id")?.clone(),
+            destructive: number("destructive"),
+            moves: number("moves"),
+            total: number("total"),
+            files,
+        })
+    }
+}
+
+/// What the GUI asks the daemon to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Request {
+    /// Carry out the mass change with this id.
+    Confirm(String),
+    /// Run now.
+    SyncNow,
+}
+
+impl Request {
+    /// Writes the request (replacing an earlier one not yet taken).
+    pub fn save(&self, path: &Path) -> io::Result<()> {
+        let text = match self {
+            Self::Confirm(id) => format!("confirm={}\n", id.replace(['\n', '\r'], "")),
+            Self::SyncNow => "sync-now\n".to_string(),
+        };
+        write_private(path, text.as_bytes())
+    }
+
+    /// Takes the request: reads and removes it. `None` when there is none.
+    pub fn take(path: &Path) -> Option<Self> {
+        let text = fs::read_to_string(path).ok()?;
+        let _ = fs::remove_file(path);
+        let line = text.lines().next()?.trim();
+        match line.split_once('=') {
+            Some(("confirm", id)) if !id.is_empty() => Some(Self::Confirm(id.to_string())),
+            _ if line == "sync-now" => Some(Self::SyncNow),
+            _ => None,
+        }
     }
 }
 
@@ -442,6 +561,51 @@ mod tests {
             check_folder(&dir, &paths),
             Err(FolderProblem::Overlaps(_))
         ));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn pending_and_requests_round_trip() {
+        let dir = temp("pending");
+        let path = dir.join("pending-changes");
+        let pending = PendingChanges {
+            id: "abc".to_string(),
+            destructive: 51,
+            moves: 2,
+            total: 300,
+            files: vec![
+                PendingChange {
+                    kind: "trash-remote".to_string(),
+                    path: "a/b.txt".to_string(),
+                    to: None,
+                },
+                PendingChange {
+                    kind: "move-local".to_string(),
+                    path: "x\ty".to_string(),
+                    to: Some("z".to_string()),
+                },
+            ],
+        };
+        pending.save(&path).unwrap();
+        let read = PendingChanges::load(&path).unwrap();
+        assert_eq!(read.id, "abc");
+        assert_eq!(read.destructive, 51);
+        assert_eq!(read.files.len(), 2);
+        assert_eq!(read.files[1].path, "x y", "a tab cannot split the line");
+        assert_eq!(read.files[1].to.as_deref(), Some("z"));
+
+        let request = dir.join("request");
+        assert_eq!(Request::take(&request), None);
+        Request::Confirm("abc".to_string()).save(&request).unwrap();
+        assert_eq!(
+            Request::take(&request),
+            Some(Request::Confirm("abc".to_string()))
+        );
+        assert_eq!(Request::take(&request), None, "taken once");
+        Request::SyncNow.save(&request).unwrap();
+        assert_eq!(Request::take(&request), Some(Request::SyncNow));
+        fs::write(&request, "confirm=\n").unwrap();
+        assert_eq!(Request::take(&request), None);
         fs::remove_dir_all(dir).unwrap();
     }
 

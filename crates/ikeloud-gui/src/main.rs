@@ -24,7 +24,8 @@ use gtk::{gio, glib};
 
 use ikeloud_api::{ApiError, Client, HttpsTransport, SavedSession, SignIn, TrustedPhone};
 use ikeloud_config::{
-    FolderProblem, Paths, Settings, State, Status, check_folder, protected_folder, write_private,
+    FolderProblem, Paths, PendingChanges, Request, Settings, State, Status, check_folder,
+    protected_folder, write_private,
 };
 use ikeloud_i18n::{Message, Translations, Value, languages_from_env};
 
@@ -58,6 +59,11 @@ struct StatusView {
     pause: gtk::Button,
     /// Read-only or two-way, as the daemon runs now.
     note: gtk::Label,
+    /// A mass change waiting for the user: what it does and the button.
+    confirm: gtk::Box,
+    confirm_list: gtk::Label,
+    /// Id of the mass change shown (the confirmation names it).
+    confirm_id: RefCell<Option<String>>,
 }
 
 /// A page of the window.
@@ -917,6 +923,41 @@ impl App {
         content.append(&buttons);
         content.append(&note);
 
+        // Shown only while a mass change waits for the user.
+        let confirm = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(12)
+            .visible(false)
+            .build();
+        let confirm_list = gtk::Label::builder()
+            .wrap(true)
+            .xalign(0.0)
+            .selectable(true)
+            .build();
+        let confirm_button = gtk::Button::builder()
+            .label(self.t("gui-confirm-changes"))
+            .halign(gtk::Align::Center)
+            .css_classes(["destructive-action"])
+            .build();
+        confirm.append(&confirm_list);
+        confirm.append(&confirm_button);
+        content.append(&confirm);
+        let this = Rc::downgrade(self);
+        confirm_button.connect_clicked(move |_| {
+            let Some(this) = this.upgrade() else { return };
+            let id = this
+                .status_view
+                .borrow()
+                .as_ref()
+                .and_then(|v| v.confirm_id.borrow().clone());
+            if let Some(id) = id {
+                match Request::Confirm(id).save(&this.paths.request) {
+                    Ok(()) => this.toast(&this.t("gui-confirm-sent")),
+                    Err(e) => this.toast(&e.to_string()),
+                }
+            }
+        });
+
         let this = Rc::downgrade(self);
         open.connect_clicked(move |_| {
             if let Some(this) = this.upgrade() {
@@ -935,6 +976,9 @@ impl App {
             detail,
             pause,
             note,
+            confirm,
+            confirm_list,
+            confirm_id: RefCell::new(None),
         });
         self.shown.set(None);
         self.nav.replace(self.page_with("ike loud", &content, true));
@@ -1198,6 +1242,38 @@ impl App {
         resume(self);
     }
 
+    /// The first changes of a waiting mass change, one per line.
+    fn pending_text(&self, pending: &PendingChanges) -> String {
+        const SHOWN: usize = 8;
+        let mut lines: Vec<String> = pending
+            .files
+            .iter()
+            .take(SHOWN)
+            .map(|change| {
+                let what = match change.kind.as_str() {
+                    "trash-remote" => self.t("gui-kind-trash-remote"),
+                    "overwrite-remote" => self.t("gui-kind-overwrite-remote"),
+                    "trash-local" => self.t("gui-kind-trash-local"),
+                    "overwrite-local" => self.t("gui-kind-overwrite-local"),
+                    "move-remote" => self.t("gui-kind-move-remote"),
+                    _ => self.t("gui-kind-move-local"),
+                };
+                match &change.to {
+                    Some(to) => format!("{what}: {} → {to}", change.path),
+                    None => format!("{what}: {}", change.path),
+                }
+            })
+            .collect();
+        let more = pending.files.len().saturating_sub(SHOWN);
+        if more > 0 {
+            lines.push(self.message(&Message::new("gui-more-changes").arg(
+                "count",
+                Value::Number(u64::try_from(more).unwrap_or(u64::MAX)),
+            )));
+        }
+        lines.join("\n")
+    }
+
     /// Saves the upload setting; the daemon reads it after its next run.
     fn set_upload(&self, upload: bool) {
         let saved = Settings {
@@ -1358,7 +1434,8 @@ impl App {
         } else {
             "gui-read-only"
         };
-        let key = (badge, format!("{title}\n{detail}\n{note}"));
+        let pending_id = PendingChanges::load(&self.paths.pending).map(|p| p.id);
+        let key = (badge, format!("{title}\n{detail}\n{note}\n{pending_id:?}"));
         let previous = self.shown.replace(Some(key.clone()));
         if previous.as_ref() == Some(&key) {
             return;
@@ -1374,6 +1451,14 @@ impl App {
             view.pause
                 .set_label(&self.t(if paused { "gui-resume" } else { "gui-pause" }));
             view.note.set_label(&self.t(note));
+            let pending = (state == Some(State::NeedsConfirmation) && !paused)
+                .then(|| PendingChanges::load(&self.paths.pending))
+                .flatten();
+            view.confirm.set_visible(pending.is_some());
+            if let Some(pending) = &pending {
+                view.confirm_list.set_label(&self.pending_text(pending));
+            }
+            *view.confirm_id.borrow_mut() = pending.map(|p| p.id);
         }
         if state == Some(State::SignedOut) && self.status_view.borrow().is_some() {
             *self.status_view.borrow_mut() = None;
@@ -1420,7 +1505,19 @@ impl App {
                         .arg("downloaded", Value::Number(downloaded)),
                 ),
             ),
-            Some(State::NeedsConfirmation) => (self.t("gui-state-needs-confirmation"), raw),
+            Some(State::NeedsConfirmation) => {
+                let detail = PendingChanges::load(&self.paths.pending)
+                    .map(|p| {
+                        self.message(
+                            &Message::new("rejected-mass-change")
+                                .arg("changes", Value::Number(p.destructive))
+                                .arg("moves", Value::Number(p.moves))
+                                .arg("total", Value::Number(p.total)),
+                        )
+                    })
+                    .unwrap_or(raw);
+                (self.t("gui-state-needs-confirmation"), detail)
+            }
             Some(State::SignedOut) => (
                 self.t("gui-state-signed-out"),
                 self.t("gui-state-signed-out-detail"),
