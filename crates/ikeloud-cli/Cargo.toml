@@ -13,3 +13,4 @@ workspace = true
 [dependencies]
 ikeloud-api = { path = "../ikeloud-api" }
 ikeloud-config = { path = "../ikeloud-config" }
+ikeloud-keyring = { path = "../ikeloud-keyring" }

@@ -26,6 +26,7 @@ use ikeloud_daemon::{
     Timing, Written, spawn_watcher,
 };
 use ikeloud_i18n::{Translations, languages_from_env};
+use ikeloud_keyring::SessionStore;
 use ikeloud_local::{LocalDisk, trash_date};
 use ikeloud_safety::{
     Action, ApprovedAction, ChangeKind, DEFAULT_SETTLE_TIME, MassChangeSummary, Mode,
@@ -54,10 +55,9 @@ fn main() -> ExitCode {
         report(State::Error, "not set up: choose a folder in the app");
         return ExitCode::from(2);
     };
-    let Some(saved) = std::fs::read_to_string(&paths.session)
-        .ok()
-        .and_then(|t| SavedSession::from_json(&t))
-    else {
+    // The session from the keyring (or the private file without one).
+    let store = SessionStore::new(&paths);
+    let Some(saved) = store.load().and_then(|t| SavedSession::from_json(&t)) else {
         report(State::SignedOut, "");
         return ExitCode::from(3);
     };
@@ -78,7 +78,7 @@ fn main() -> ExitCode {
         report(State::SignedOut, "");
         return ExitCode::from(3);
     }
-    let _ = write_private(&paths.session, client.saved().to_json().as_bytes());
+    store.save(&client.saved().to_json());
 
     if let Err(e) = std::fs::create_dir_all(&folder) {
         report(State::Error, &format!("cannot create the folder: {e}"));
@@ -117,12 +117,9 @@ fn main() -> ExitCode {
 
     let (events, receive) = mpsc::channel();
     let watches = spawn_watcher(&folder, events.clone()).ok();
-    let session_file = paths.session.clone();
     let remote = ICloudRemote::new(
         client,
-        Box::new(move |saved: &SavedSession| {
-            let _ = write_private(&session_file, saved.to_json().as_bytes());
-        }),
+        Box::new(move |saved: &SavedSession| store.save(&saved.to_json())),
     );
     let counts = Cell::new((0u64, 0u64));
     let uploaded = Cell::new(0u64);

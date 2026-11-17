@@ -19,3 +19,4 @@ ikeloud-state = { path = "../ikeloud-state" }
 ikeloud-hash = { path = "../ikeloud-hash" }
 ikeloud-i18n = { path = "../ikeloud-i18n" }
 ikeloud-config = { path = "../ikeloud-config" }
+ikeloud-keyring = { path = "../ikeloud-keyring" }

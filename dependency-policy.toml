@@ -33,7 +33,7 @@ dev = ["ikeloud-testkit"]
 [crates.ikeloud-daemon]
 # ikeloud-i18n: translated names of conflict copies; ikeloud-config: paths,
 # settings and the status file shared with the GUI.
-internal = ["ikeloud-api", "ikeloud-sync", "ikeloud-safety", "ikeloud-local", "ikeloud-state", "ikeloud-hash", "ikeloud-i18n", "ikeloud-config"]
+internal = ["ikeloud-api", "ikeloud-sync", "ikeloud-safety", "ikeloud-local", "ikeloud-state", "ikeloud-hash", "ikeloud-i18n", "ikeloud-config", "ikeloud-keyring"]
 external = []
 dev = ["ikeloud-testkit"]
 
@@ -42,12 +42,12 @@ dev = ["ikeloud-testkit"]
 # (D-Bus for the tray icon). Signs in with ikeloud-api and hands the session
 # to the daemon through the files of ikeloud-config.
 [crates.ikeloud-gui]
-internal = ["ikeloud-api", "ikeloud-config", "ikeloud-i18n"]
+internal = ["ikeloud-api", "ikeloud-config", "ikeloud-i18n", "ikeloud-keyring"]
 external = ["gtk4"]
 dev = []
 
 [crates.ikeloud-cli]
-internal = ["ikeloud-api", "ikeloud-config"]
+internal = ["ikeloud-api", "ikeloud-config", "ikeloud-keyring"]
 external = []
 dev = []
 
@@ -93,4 +93,12 @@ dev = []
 [crates.ikeloud-config]
 internal = []
 external = []
+dev = []
+
+# The session in the desktop keyring (Secret Service over D-Bus), with the
+# private file as the fallback (decision 0024). gio/glib: the same GLib the
+# app's GTK uses; this is their only direct user.
+[crates.ikeloud-keyring]
+internal = ["ikeloud-config"]
+external = ["gio", "glib"]
 dev = []

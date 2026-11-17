@@ -25,9 +25,10 @@ use gtk::{gio, glib};
 use ikeloud_api::{ApiError, Client, HttpsTransport, SavedSession, SignIn, TrustedPhone};
 use ikeloud_config::{
     FolderProblem, JournalLine, Paths, PendingChanges, Request, Settings, State, Status,
-    check_folder, load_journal, protected_folder, write_private,
+    check_folder, load_journal, protected_folder,
 };
 use ikeloud_i18n::{Message, Translations, Value, languages_from_env};
+use ikeloud_keyring::SessionStore;
 
 use crate::daemon::{DaemonProcess, EXIT_SIGNED_OUT};
 use crate::icons::{APP_ID, Badge};
@@ -159,6 +160,8 @@ struct App {
     toasts: Rc<Toasts>,
     nav: Nav,
     paths: Paths,
+    /// The signed-in session: the keyring, or the private file.
+    sessions: SessionStore,
     texts: Option<Translations>,
     client: SharedClient,
     phone: RefCell<Option<TrustedPhone>>,
@@ -266,12 +269,14 @@ impl App {
             .map(PathBuf::from)
             .unwrap_or_default();
         let paths_journal = paths.journal.clone();
+        let sessions = SessionStore::new(&paths);
         let this = Rc::new(Self {
             app: app.clone(),
             window,
             toasts,
             nav,
             paths,
+            sessions,
             texts,
             client: Arc::new(Mutex::new(None)),
             phone: RefCell::new(None),
@@ -342,8 +347,9 @@ impl App {
         });
 
         let settings = Settings::load(&this.paths.settings).unwrap_or_default();
-        let session = std::fs::read_to_string(&this.paths.session)
-            .ok()
+        let session = this
+            .sessions
+            .load()
             .and_then(|t| SavedSession::from_json(&t));
         match (settings.folder, session) {
             (Some(folder), Some(_)) => {
@@ -532,7 +538,7 @@ impl App {
     }
 
     fn save_session(&self, client: &Client<HttpsTransport>) {
-        let _ = write_private(&self.paths.session, client.saved().to_json().as_bytes());
+        self.sessions.save(&client.saved().to_json());
     }
 
     fn signin_page(self: &Rc<Self>) -> Page {
@@ -562,8 +568,9 @@ impl App {
                     return;
                 }
                 // Keep the trust token of an earlier sign-in of this account.
-                let previous = std::fs::read_to_string(&this.paths.session)
-                    .ok()
+                let previous = this
+                    .sessions
+                    .load()
                     .and_then(|t| SavedSession::from_json(&t))
                     .filter(|s| s.account_name() == name);
                 let password = password.clone();
@@ -1060,8 +1067,9 @@ impl App {
         );
         content.append(&folder_box);
 
-        let account = std::fs::read_to_string(&self.paths.session)
-            .ok()
+        let account = self
+            .sessions
+            .load()
             .and_then(|t| SavedSession::from_json(&t))
             .map(|s| s.account_name().to_string())
             .unwrap_or_default();
@@ -1495,7 +1503,7 @@ impl App {
     fn sign_out(self: &Rc<Self>) {
         let status = Status::load(&self.paths.status);
         self.daemon.borrow_mut().stop(status.as_ref());
-        let _ = std::fs::remove_file(&self.paths.session);
+        self.sessions.delete();
         let _ = std::fs::remove_file(&self.paths.status);
         if let Ok(mut guard) = self.client.lock() {
             *guard = None;
