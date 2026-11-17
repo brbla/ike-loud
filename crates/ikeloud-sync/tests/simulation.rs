@@ -647,6 +647,7 @@ impl World {
             }
             Action::Download {
                 remote,
+                expected_etag,
                 local,
                 replaces,
                 ..
@@ -654,6 +655,11 @@ impl World {
                 let Some(r) = self.remote.get(remote.as_str()).cloned() else {
                     return changed;
                 };
+                // The server must still hold the planned version there
+                // (seed 108965: another document moved onto the path).
+                if r.etag.to_string() != expected_etag.as_str() {
+                    return changed;
+                }
                 let old = match (replaces, self.local.get(local.as_str()).cloned()) {
                     (Some(v), Some(old))
                         if Self::id(&old) == v.id && old.content.to_string() == v.hash.as_str() =>

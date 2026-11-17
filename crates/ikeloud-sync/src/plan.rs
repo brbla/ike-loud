@@ -271,6 +271,7 @@ impl<'a> Planner<'a> {
                     let local = self.path_of(l);
                     self.push(Action::Download {
                         remote: r.path.clone(),
+                        expected_etag: r.etag.clone(),
                         local,
                         size: r.size,
                         replaces: Some(version(l)),
@@ -466,6 +467,7 @@ fn upload_new(l: &LocalFile, local: RelPath, remote: RelPath) -> Action {
 fn download_new(r: &RemoteFile, local: RelPath) -> Action {
     Action::Download {
         remote: r.path.clone(),
+        expected_etag: r.etag.clone(),
         local,
         size: r.size,
         replaces: None,

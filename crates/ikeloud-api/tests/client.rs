@@ -23,10 +23,19 @@ use ikeloud_api::{ApiError, Client, Kind, ROOT, SavedSession, SignIn};
 
 type Reply = (u16, Vec<(&'static str, &'static str)>, String);
 
+/// A request as the fake server received it (the body read to the end).
+#[derive(Debug, Clone)]
+struct Sent {
+    method: Method,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
 #[derive(Clone, Default)]
 struct Fake {
     replies: Rc<RefCell<VecDeque<Reply>>>,
-    sent: Rc<RefCell<Vec<Request>>>,
+    sent: Rc<RefCell<Vec<Sent>>>,
 }
 
 impl Fake {
@@ -37,13 +46,13 @@ impl Fake {
         self
     }
 
-    fn sent(&self) -> Vec<Request> {
+    fn sent(&self) -> Vec<Sent> {
         self.sent.borrow().clone()
     }
 
     fn body(&self, index: usize) -> serde_json::Value {
         let sent = self.sent();
-        let body = sent[index].body.clone().unwrap_or_default();
+        let body = sent[index].body.clone();
         serde_json::from_slice(&body).unwrap()
     }
 
@@ -57,8 +66,19 @@ impl Fake {
 }
 
 impl Transport for Fake {
-    fn send(&self, request: Request) -> Result<Response, TransportError> {
-        self.sent.borrow_mut().push(request);
+    fn send(&self, request: Request<'_>) -> Result<Response, TransportError> {
+        // Like the real transport: a body that fails while being read
+        // fails the request, and nothing counts as sent.
+        let body = request
+            .body
+            .into_bytes()
+            .map_err(|e| TransportError::Io(e.to_string()))?;
+        self.sent.borrow_mut().push(Sent {
+            method: request.method,
+            url: request.url,
+            headers: request.headers,
+            body,
+        });
         let (status, headers, body) = self
             .replies
             .borrow_mut()
@@ -468,7 +488,7 @@ fn real_transport_refuses_other_hosts() {
             method: Method::Get,
             url: url.to_string(),
             headers: vec![],
-            body: None,
+            body: ikeloud_api::http::Body::Empty,
         };
         assert!(
             matches!(
@@ -491,4 +511,215 @@ fn saved_session_hides_secrets() {
     assert_eq!(&restored, client.saved());
     assert_eq!(restored.account_name(), ACCOUNT);
     assert_eq!(SavedSession::from_json("{"), None);
+}
+
+#[test]
+fn download_reports_the_current_version() {
+    let (fake, mut client) = signed_in();
+    fake.reply(200, &[], ROOT_LISTING);
+    let item = client.list_folder(ROOT).unwrap().items.remove(0);
+    // The listing said 9::8; the document was edited since.
+    fake.reply(
+        200,
+        &[],
+        r#"{"data_token": {"url": "https://cvws.icloud-content.com/B/abc"}, "double_etag": "c::b"}"#,
+    )
+    .reply(200, &[], "hello world");
+    let opened = client.open_download(&item).unwrap();
+    assert_eq!(opened.etag.as_deref(), Some("c::b"));
+
+    fake.reply(
+        200,
+        &[],
+        r#"{"data_token": {"url": "https://cvws.icloud-content.com/B/abc"}}"#,
+    )
+    .reply(200, &[], "hello world");
+    assert_eq!(client.open_download(&item).unwrap().etag, None);
+}
+
+// --- writes (shapes from the experiments of decision 0023) -------------------
+
+use ikeloud_api::{UploadTarget, Uploaded};
+
+const SLOT: &str = r#"[{"document_id": "NEWDOC", "url": "https://p63-docws.icloud.com/ws/upload/abc", "owner": "x", "owner_id": "y"}]"#;
+const RECEIPT: &str = r#"{"singleFile": {"referenceChecksum": "rc", "size": 5, "fileChecksum": "fc", "wrappingKey": "wk", "receipt": "r"}}"#;
+
+fn uploaded(doc: &str, etag: &str) -> String {
+    format!(
+        r#"{{"results": [{{"status": {{"status_code": 0, "error_message": "OK"}}, "document": {{"document_id": "{doc}", "etag": "{etag}", "name": "a.txt"}}}}]}}"#
+    )
+}
+
+#[test]
+fn upload_new_never_replaces() {
+    let (fake, mut client) = signed_in();
+    fake.reply(200, &[], SLOT).reply(200, &[], RECEIPT).reply(
+        200,
+        &[],
+        &uploaded("NEWDOC", "k::j"),
+    );
+    let target = UploadTarget::New {
+        folder_docwsid: "root".to_string(),
+    };
+    let result = client.upload(&target, "a.txt", 5, &mut &b"hello"[..], 1000);
+    assert_eq!(
+        result.unwrap(),
+        Uploaded {
+            docwsid: "NEWDOC".to_string(),
+            etag: "k::j".to_string()
+        }
+    );
+    let sent = fake.sent();
+    assert!(
+        sent[3]
+            .url
+            .contains("/ws/com.apple.CloudDocs/upload/web?dsid=123456")
+    );
+    assert_eq!(fake.body(3)["size"], "5");
+    // The content goes as multipart, exactly as read.
+    assert_eq!(sent[4].url, "https://p63-docws.icloud.com/ws/upload/abc");
+    let multipart = String::from_utf8(sent[4].body.clone()).unwrap();
+    assert!(multipart.contains(
+        "filename=\"a.txt\"\r\nContent-Type: application/octet-stream\r\n\r\nhello\r\n--"
+    ));
+    let update = fake.body(5);
+    assert_eq!(update["command"], "add_file");
+    assert_eq!(update["allow_conflict"], false);
+    assert_eq!(update["document_id"], "NEWDOC");
+    assert_eq!(update["path"]["path"], "a.txt");
+    assert_eq!(update["path"]["starting_document_id"], "root");
+    assert!(update.get("etag").is_none());
+
+    // A taken name: refused, nothing replaced.
+    fake.reply(200, &[], SLOT).reply(200, &[], RECEIPT).reply(
+        409,
+        &[],
+        r#"{"error_code": "UNIQUE_FIELD_FAILURE", "reason": "Uniqueness constraint violation."}"#,
+    );
+    let result = client.upload(&target, "a.txt", 5, &mut &b"hello"[..], 1000);
+    assert_eq!(result, Err(ApiError::NameTaken));
+}
+
+#[test]
+fn replace_names_the_version_it_replaces() {
+    let (fake, mut client) = signed_in();
+    let target = UploadTarget::Replace {
+        folder_docwsid: "root".to_string(),
+        docwsid: "OLD".to_string(),
+        etag: "18::17".to_string(),
+    };
+    fake.reply(200, &[], SLOT)
+        .reply(200, &[], RECEIPT)
+        .reply(200, &[], &uploaded("OLD", "1c::1b"));
+    let result = client.upload(&target, "a.txt", 5, &mut &b"hello"[..], 1000);
+    assert_eq!(result.unwrap().etag, "1c::1b");
+    let update = fake.body(5);
+    assert_eq!(update["command"], "modify_file");
+    assert_eq!(update["document_id"], "OLD");
+    assert_eq!(update["etag"], "18::17");
+    assert_eq!(update["allow_conflict"], false);
+
+    fake.reply(200, &[], SLOT).reply(200, &[], RECEIPT).reply(
+        409,
+        &[],
+        r#"{"error_code": "OP_LOCK_FAILURE", "reason": "client oplock error updating record"}"#,
+    );
+    let result = client.upload(&target, "a.txt", 5, &mut &b"hello"[..], 1000);
+    assert_eq!(result, Err(ApiError::VersionChanged));
+}
+
+#[test]
+fn upload_of_a_file_that_changes_size_fails() {
+    let (fake, mut client) = signed_in();
+    let target = UploadTarget::New {
+        folder_docwsid: "root".to_string(),
+    };
+    // The file has 3 bytes, not the 5 the engine saw, or 7: the upload
+    // fails instead of sending something else than declared.
+    fake.reply(200, &[], SLOT);
+    let result = client.upload(&target, "a.txt", 5, &mut &b"abc"[..], 1000);
+    assert!(matches!(result, Err(ApiError::Transport(_))), "{result:?}");
+    fake.reply(200, &[], SLOT);
+    let result = client.upload(&target, "a.txt", 5, &mut &b"abcdefg"[..], 1000);
+    assert!(matches!(result, Err(ApiError::Transport(_))), "{result:?}");
+    // Only the two slot requests reached the server.
+    assert_eq!(fake.sent().len(), 5);
+}
+
+#[test]
+fn trash_move_and_rename() {
+    let (fake, mut client) = signed_in();
+    fake.reply(
+        200,
+        &[],
+        r#"{"items": [{"status": "OK", "drivewsid": "FILE::z::D", "etag": "x"}]}"#,
+    );
+    client.trash("FILE::z::D", "o::n").unwrap();
+    assert_eq!(fake.body(3)["items"][0]["etag"], "o::n");
+    assert!(fake.sent()[3].url.contains("/moveItemsToTrash?dsid=123456"));
+
+    fake.reply(
+        200,
+        &[],
+        r#"{"items": [{"status": "ETAG_CONFLICT", "drivewsid": "FILE::z::D", "etag": "o::n"}]}"#,
+    );
+    assert_eq!(
+        client.trash("FILE::z::D", "o::m"),
+        Err(ApiError::VersionChanged)
+    );
+
+    fake.reply(
+        200,
+        &[],
+        r#"{"items": [{"status": "OK", "drivewsid": "FILE::z::D", "etag": "w::v"}]}"#,
+    );
+    assert_eq!(
+        client
+            .move_item("FILE::z::D", "u::t", "FOLDER::z::P")
+            .unwrap(),
+        "w::v"
+    );
+    assert_eq!(fake.body(5)["destinationDrivewsId"], "FOLDER::z::P");
+
+    fake.reply(
+        200,
+        &[],
+        r#"{"items": [{"status": "OK", "drivewsid": "FILE::z::D", "etag": "s::r", "name": "b", "extension": "txt"}]}"#,
+    );
+    assert_eq!(
+        client.rename("FILE::z::D", "k::j", "b.txt").unwrap(),
+        "s::r"
+    );
+    // The server picked another name: reported, not taken as success.
+    fake.reply(
+        200,
+        &[],
+        r#"{"items": [{"status": "OK", "drivewsid": "FILE::z::D", "etag": "w::v", "name": "a 3", "extension": "txt"}]}"#,
+    );
+    assert_eq!(
+        client.rename("FILE::z::D", "w::v", "a 2.txt"),
+        Err(ApiError::NameTaken)
+    );
+
+    fake.reply(
+        200,
+        &[],
+        r#"{"folders": [{"status": "OK", "drivewsid": "FOLDER::z::N", "docwsid": "N", "etag": "f"}]}"#,
+    );
+    assert_eq!(
+        client
+            .create_folder("FOLDER::z::root", "pod")
+            .unwrap()
+            .docwsid,
+        "N"
+    );
+    fake.reply(
+        200,
+        &[],
+        r#"{"folders": [{"clientId": "x", "status": "UNKNOWN"}]}"#,
+    );
+    assert!(matches!(
+        client.create_folder("FOLDER::z::root", "pod"),
+        Err(ApiError::Rejected { .. })
+    ));
 }

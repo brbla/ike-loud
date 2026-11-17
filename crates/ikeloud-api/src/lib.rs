@@ -10,7 +10,9 @@ pub mod cookies;
 pub mod drive;
 pub mod http;
 pub mod srp;
+pub mod write;
 
 pub use client::{Account, ApiError, Client, SavedSession, SignIn, TrustedPhone};
-pub use drive::{Folder, Item, Kind, ROOT};
+pub use drive::{Folder, Item, Kind, Opened, ROOT};
 pub use http::HttpsTransport;
+pub use write::{CreatedFolder, UploadTarget, Uploaded};

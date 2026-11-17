@@ -109,6 +109,7 @@ fn what_an_action_changes() {
             "download over a local file",
             Action::Download {
                 remote: p("r"),
+                expected_etag: Etag::new("e"),
                 local: p("l"),
                 size: 1,
                 replaces: Some(version.clone()),
@@ -119,6 +120,7 @@ fn what_an_action_changes() {
             "download to a free place",
             Action::Download {
                 remote: p("r"),
+                expected_etag: Etag::new("e"),
                 local: p("l"),
                 size: 1,
                 replaces: None,

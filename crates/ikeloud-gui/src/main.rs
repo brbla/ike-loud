@@ -235,7 +235,6 @@ impl App {
             next: Cell::new(0),
         };
 
-
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_default();

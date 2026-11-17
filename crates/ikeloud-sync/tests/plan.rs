@@ -109,9 +109,10 @@ fn upload_from(local: &str, remote: &str, n: u64, etag: Option<&str>) -> Action 
 }
 
 /// Download to a free local path.
-fn download(path: &str) -> Action {
+fn download(path: &str, etag: &str) -> Action {
     Action::Download {
         remote: p(path),
+        expected_etag: Etag::new(etag),
         local: p(path),
         size: REMOTE_SIZE,
         replaces: None,
@@ -119,9 +120,10 @@ fn download(path: &str) -> Action {
 }
 
 /// Download over local file number `n` with content `hash`.
-fn download_over(path: &str, n: u64, hash: &str) -> Action {
+fn download_over(path: &str, n: u64, hash: &str, etag: &str) -> Action {
     Action::Download {
         remote: p(path),
+        expected_etag: Etag::new(etag),
         local: p(path),
         size: REMOTE_SIZE,
         replaces: Some(version(n, hash)),
@@ -169,11 +171,12 @@ fn move_remote(from: &str, to: &str, etag: &str) -> Action {
 
 /// Local file number `n` kept as a conflict copy (and the server version
 /// downloaded in its place).
-fn conflict(path: &str, n: u64, download_too: bool) -> Vec<Action> {
+/// `download_too`: the server version (its etag) downloaded in its place.
+fn conflict(path: &str, n: u64, download_too: Option<&str>) -> Vec<Action> {
     let c = copy(path);
     let mut a = vec![move_local(path, &c, n), conflict_copy(&c, n)];
-    if download_too {
-        a.push(download(path));
+    if let Some(etag) = download_too {
+        a.push(download(path, etag));
     }
     a
 }
@@ -205,14 +208,14 @@ fn decision_table() {
             Some("h1"),
             Some("e2"),
             true,
-            vec![download_over("a", 1, "h1")],
+            vec![download_over("a", 1, "h1", "e2")],
         ),
         (
             "changed on both",
             Some("h2"),
             Some("e2"),
             true,
-            conflict("a", 1, true),
+            conflict("a", 1, Some("e2")),
         ),
         (
             "deleted on Linux",
@@ -234,14 +237,14 @@ fn decision_table() {
             None,
             Some("e2"),
             true,
-            vec![download("a")],
+            vec![download("a", "e2")],
         ),
         (
             "changed on Linux, deleted on iCloud",
             Some("h2"),
             None,
             true,
-            conflict("a", 1, false),
+            conflict("a", 1, None),
         ),
         // No common state (the file is new).
         (
@@ -256,14 +259,14 @@ fn decision_table() {
             None,
             Some("e1"),
             false,
-            vec![download("a")],
+            vec![download("a", "e1")],
         ),
         (
             "new on both",
             Some("h1"),
             Some("e1"),
             false,
-            conflict("a", 1, true),
+            conflict("a", 1, Some("e1")),
         ),
     ];
     for (name, l, r, with_base, expected) in cases {
@@ -523,7 +526,7 @@ fn a_translation_without_the_number_cannot_hang_the_planner() {
         vec![
             move_local("a", "copy", 1),
             conflict_copy("copy", 1),
-            download("a")
+            download("a", "e2")
         ]
     );
     assert_eq!(result.no_copy_name, vec![p("b")]);
@@ -756,7 +759,7 @@ fn pairing_new_files_after_normalization() {
             vec![
                 move_local(nfd, &copy(nfd), 1),
                 conflict_copy(&copy(nfd), 1),
-                download("Příloha.pdf"),
+                download("Příloha.pdf", "e1"),
             ],
         ),
     ];
@@ -862,7 +865,7 @@ fn conflict_copy_gets_a_free_name() {
         vec![
             move_local("report.odt", second, 1),
             conflict_copy(second, 1),
-            download("report.odt"),
+            download("report.odt", "e2"),
         ]
     );
 }

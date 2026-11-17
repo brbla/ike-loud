@@ -271,6 +271,10 @@ pub enum Action {
     Download {
         /// Which server file.
         remote: RelPath,
+        /// The server version the engine planned to download. The effects
+        /// must not write anything when the server holds another version
+        /// (or another document) there: the plan no longer fits.
+        expected_etag: Etag,
         /// Where locally (may differ from `remote` when the file was also
         /// moved; the move follows in a later run).
         local: RelPath,

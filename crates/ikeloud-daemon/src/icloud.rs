@@ -63,6 +63,10 @@ pub fn stop_reason(error: &ApiError) -> StopReason {
         | ApiError::DriveUnavailable
         | ApiError::Status { .. }
         | ApiError::Malformed { .. } => StopReason::UnknownResponse,
+        // Nothing was written; the item is as the next listing shows it.
+        ApiError::NameTaken | ApiError::VersionChanged | ApiError::Rejected { .. } => {
+            StopReason::UnknownResponse
+        }
     }
 }
 
@@ -118,17 +122,20 @@ impl<T: Transport> Remote for ICloudRemote<T> {
 
     fn download(&mut self, path: &RelPath) -> Result<Download, RemoteError> {
         let item = self.items.get(path).cloned().ok_or(RemoteError::Changed)?;
-        let content = self.client.open_download(&item);
+        let opened = self.client.open_download(&item);
         self.saved();
-        let content = content.map_err(|e| match e {
+        let opened = opened.map_err(|e| match e {
             // The listing is older than the file: the next run sees why.
             ApiError::Status { status: 404, .. } => RemoteError::Changed,
             e => RemoteError::Stop(stop_reason(&e)),
         })?;
+        // The version being read is the one the server reports now; when it
+        // differs from the planned one, the effects write nothing.
+        let etag = opened.etag.unwrap_or(item.etag);
         Ok(Download {
             doc_id: DocId::new(item.docwsid),
-            etag: Etag::new(item.etag),
-            content,
+            etag: Etag::new(etag),
+            content: opened.content,
         })
     }
 
