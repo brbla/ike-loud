@@ -94,7 +94,7 @@ gui-verify = Ověřit
 gui-resend = Poslat nový kód
 gui-code-sent = Nový kód je na cestě.
 gui-folder-title = Kam ukládat soubory
-gui-folder-description = Do této složky se stáhne iCloud Drive. Musí být nová nebo prázdná: ike loud nikdy nesmíchá iCloud se soubory, které už tam jsou.
+gui-folder-description = Do této složky se stáhne iCloud Drive. Nejlépe nová nebo prázdná; co v ní už je, se po potvrzení přesune do koše, aby v ní byl jen iCloud.
 gui-folder = Složka
 gui-folder-choose = Vybrat…
 gui-folder-done = Začít stahovat
@@ -133,6 +133,7 @@ gui-folder-change = Změnit…
 gui-folder-change-description = Kam se stahuje iCloud Drive. Nová složka musí být nová nebo prázdná; ve staré soubory zůstanou.
 gui-folder-changed = Složka je změněná. iCloud Drive se do ní stahuje.
 gui-account-section = Účet
+gui-folder-absolute = Napište celou cestu, např. ~/iCloud nebo /home/vy/iCloud.
 gui-cancel = Zrušit
 gui-folder-will-be-emptied =
     { $count ->
@@ -149,4 +150,10 @@ gui-change-body = iCloud Drive se znovu celý stáhne do složky { $folder }.
 gui-change-old = Současná složka { $old } může zůstat, jak je, nebo jít do koše (odtud ji půjde obnovit).
 gui-change-keep-old = Změnit, starou ponechat
 gui-change-trash-old = Změnit, starou do koše
+gui-local-pending =
+    { $count ->
+        [one] 1 místní změna se na iCloud nenahraje: ike loud z iCloudu zatím jen čte.
+        [few] { $count } místní změny se na iCloud nenahrají: ike loud z iCloudu zatím jen čte.
+       *[other] { $count } místních změn se na iCloud nenahraje: ike loud z iCloudu zatím jen čte.
+    }
 gui-read-only = Zatím jen čtení: na iCloud se nikdy nic nezapíše.

@@ -167,6 +167,8 @@ pub struct Status {
     pub remote_files: u64,
     /// Files downloaded since the daemon started.
     pub downloaded: u64,
+    /// Local changes that are not uploaded (read-only mode defers them).
+    pub local_pending: u64,
     /// Seconds since 1970 of the last write of the status.
     pub updated: u64,
     /// Process id of the daemon that wrote it.
@@ -186,6 +188,7 @@ impl Status {
             detail: detail.into().replace(['\n', '\r'], " "),
             remote_files,
             downloaded,
+            local_pending: 0,
             updated: unix_now(),
             pid: std::process::id(),
         }
@@ -194,11 +197,12 @@ impl Status {
     /// Writes the status file.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         let text = format!(
-            "state={}\ndetail={}\nremote_files={}\ndownloaded={}\nupdated={}\npid={}\n",
+            "state={}\ndetail={}\nremote_files={}\ndownloaded={}\nlocal_pending={}\nupdated={}\npid={}\n",
             self.state.name(),
             self.detail.replace(['\n', '\r'], " "),
             self.remote_files,
             self.downloaded,
+            self.local_pending,
             self.updated,
             self.pid
         );
@@ -218,6 +222,7 @@ impl Status {
             detail: map.get("detail").cloned().unwrap_or_default(),
             remote_files: number("remote_files"),
             downloaded: number("downloaded"),
+            local_pending: number("local_pending"),
             updated: number("updated"),
             pid: map.get("pid").and_then(|v| v.parse().ok()).unwrap_or(0),
         })
@@ -368,7 +373,8 @@ mod tests {
         let dir = temp("status");
         let path = dir.join("status");
         assert_eq!(Status::load(&path), None);
-        let status = Status::now(State::Syncing, "two\nlines", 12, 3);
+        let mut status = Status::now(State::Syncing, "two\nlines", 12, 3);
+        status.local_pending = 4;
         status.save(&path).unwrap();
         let read = Status::load(&path).unwrap();
         assert_eq!(read, status);
