@@ -133,3 +133,94 @@ fn empty_plan() {
     };
     assert_eq!(execute(vec![], &mut effects), Report::default());
 }
+
+fn folder(path: &str) -> Action {
+    Action::CreateRemoteFolder { path: p(path) }
+}
+
+fn move_local(path: &str) -> Action {
+    Action::MoveLocal {
+        from: p(path),
+        to: p(&format!("{path}-moved")),
+        local_id: id(9),
+    }
+}
+
+#[test]
+fn independent_actions_are_grouped_in_plan_order() {
+    let plan = approved(vec![
+        folder("a"),
+        folder("b"),
+        folder("a/x"),
+        upload("a/x/1"),
+        upload("a/x/2"),
+        upload("b/3"),
+        move_local("c"),
+        move_local("d"),
+        upload("e"),
+    ]);
+    let groups: Vec<Vec<Action>> = ikeloud_sync::independent(&plan)
+        .into_iter()
+        .map(|r| plan[r].iter().map(|a| a.action().clone()).collect())
+        .collect();
+    assert_eq!(
+        groups,
+        vec![
+            vec![folder("a"), folder("b")],
+            vec![folder("a/x")],
+            vec![upload("a/x/1"), upload("a/x/2"), upload("b/3")],
+            vec![move_local("c")],
+            vec![move_local("d")],
+            vec![upload("e")],
+        ],
+        "folders by depth, transfers together, moves one by one"
+    );
+}
+
+/// Effects that run a group in reverse order, as threads might finish.
+struct Reversed {
+    answers: std::collections::HashMap<String, Result<Option<Transfer>, EffectError>>,
+}
+
+impl Effects for Reversed {
+    fn apply(&mut self, action: ApprovedAction) -> Result<Option<Transfer>, EffectError> {
+        let key = match action.action() {
+            Action::Upload { remote, .. } => remote.as_str().to_string(),
+            _ => String::new(),
+        };
+        self.answers.remove(&key).expect("an answer")
+    }
+
+    fn apply_group(
+        &mut self,
+        actions: Vec<ApprovedAction>,
+    ) -> Vec<Option<ikeloud_sync::ApplyResult>> {
+        let mut results: Vec<_> = actions
+            .into_iter()
+            .rev()
+            .map(|a| Some(self.apply(a)))
+            .collect();
+        results.reverse();
+        results
+    }
+}
+
+#[test]
+fn a_stop_in_a_group_keeps_what_the_others_did() {
+    let plan = approved(vec![upload("a"), upload("b"), upload("c"), move_local("d")]);
+    let mut effects = Reversed {
+        answers: [
+            ("a".to_string(), Ok(Some(transfer("da")))),
+            ("b".to_string(), Err(EffectError::Stop(StopReason::Offline))),
+            ("c".to_string(), Ok(Some(transfer("dc")))),
+        ]
+        .into(),
+    };
+    let report = execute(plan, &mut effects);
+    // c finished although b stopped the run: done, so the state learns it.
+    assert_eq!(report.done, vec![upload("a"), upload("c")]);
+    assert_eq!(report.skipped, vec![upload("b")]);
+    assert_eq!(report.not_attempted, vec![move_local("d")]);
+    assert_eq!(report.stopped, Some(StopReason::Offline));
+    assert_eq!(report.transfers.len(), 2);
+}

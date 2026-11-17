@@ -246,3 +246,61 @@ fn icloud_unreachable_changes_nothing() {
     ));
     assert_eq!(f.db.base().expect("base"), vec![]);
 }
+
+#[test]
+fn uploads_run_in_parallel_and_all_are_recorded() {
+    let mut f = Fixture::new("parallel");
+    for i in 0..20 {
+        f.write(&format!("d{}/f{i}.txt", i % 3), format!("{i}").as_bytes());
+    }
+    match f.run_parallel() {
+        RunOutcome::Ran(report) => {
+            assert_eq!(report.executed.stopped, None);
+            let uploads = report
+                .executed
+                .done
+                .iter()
+                .filter(|a| matches!(a, ikeloud_safety::Action::Upload { .. }))
+                .count();
+            assert_eq!(uploads, 20);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(f.icloud.files.len(), 20);
+    assert_eq!(
+        f.db.base().expect("base").len(),
+        20,
+        "every upload recorded"
+    );
+    assert!(f.run().executed.done.is_empty(), "nothing left to do");
+}
+
+#[test]
+fn an_outage_in_a_parallel_group_loses_no_record() {
+    let mut f = Fixture::new("parallel-outage");
+    for i in 0..12 {
+        f.write(&format!("f{i:02}.txt"), format!("{i}").as_bytes());
+    }
+    // Offline after five writes: some uploads are done, the rest stop.
+    f.icloud.offline_after = Some(5);
+    let first = f.run_parallel();
+    let RunOutcome::Ran(report) = first else {
+        panic!("{first:?}")
+    };
+    assert_eq!(report.executed.stopped, Some(StopReason::Offline));
+    let on_icloud = f.icloud.files.len();
+    assert!(on_icloud >= 5, "{on_icloud}");
+    // Whatever reached iCloud is in the common state, so the next run does
+    // not take it for a new file on both sides (no conflict copies).
+    assert_eq!(f.db.base().expect("base").len(), on_icloud);
+    f.icloud.offline_after = None;
+    let second = f.run_parallel();
+    assert!(matches!(second, RunOutcome::Ran(_)), "{second:?}");
+    assert_eq!(f.icloud.files.len(), 12);
+    assert!(
+        f.icloud.files.keys().all(|p| !p.contains("conflict")),
+        "{:?}",
+        f.icloud.files.keys()
+    );
+    assert!(f.run().executed.done.is_empty());
+}

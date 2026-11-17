@@ -393,9 +393,17 @@ impl<R: Remote> Remote for Reporting<'_, R> {
         };
         let written = self.inner.write(action, content)?;
         if let Some(path) = path {
-            self.uploaded.set(self.uploaded.get().saturating_add(1));
-            self.save(path.as_str());
+            self.uploaded_elsewhere(&path);
         }
         Ok(written)
+    }
+
+    fn fork(&mut self) -> Option<Box<dyn Remote + Send>> {
+        self.inner.fork()
+    }
+
+    fn uploaded_elsewhere(&mut self, path: &RelPath) {
+        self.uploaded.set(self.uploaded.get().saturating_add(1));
+        self.save(path.as_str());
     }
 }

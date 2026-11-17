@@ -188,7 +188,8 @@ pub fn https_host(url: &str) -> Option<&str> {
     (!host.is_empty()).then_some(host)
 }
 
-/// The real transport over HTTPS.
+/// The real transport over HTTPS. Clones share the connection pool.
+#[derive(Clone)]
 pub struct HttpsTransport {
     agent: ureq::Agent,
 }

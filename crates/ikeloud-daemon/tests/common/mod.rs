@@ -327,6 +327,39 @@ impl Fixture {
         .expect("state db")
     }
 
+    /// A run whose remote can fork: independent actions run on worker
+    /// threads, like against the real iCloud.
+    pub fn run_parallel(&mut self) -> RunOutcome {
+        let shared = Shared(std::sync::Arc::new(std::sync::Mutex::new(std::mem::take(
+            &mut self.icloud,
+        ))));
+        let mut remote = Shared(std::sync::Arc::clone(&shared.0));
+        let mode = std::cell::Cell::new(ikeloud_safety::Mode::Full);
+        let setup = SyncSetup {
+            disk: LocalDisk::new(
+                self.root(),
+                self.dir.join("trash"),
+                self.dir.join("history"),
+            ),
+            settle_time: DEFAULT_SETTLE_TIME,
+            conflict_name: &copy_name,
+            mode: &mode,
+        };
+        let now = SystemTime::now() + Duration::from_secs(60);
+        let outcome = sync_once(
+            &setup,
+            &mut remote,
+            &mut self.db,
+            &mut HashCache::default(),
+            None,
+            now,
+        )
+        .expect("state db");
+        drop(remote);
+        self.icloud = std::mem::take(&mut *shared.0.lock().expect("lock"));
+        outcome
+    }
+
     pub fn run(&mut self) -> RunReport {
         match self.run_with(None) {
             RunOutcome::Ran(r) => r,
@@ -368,5 +401,32 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// The fake iCloud shared between forks, for the parallel path.
+pub struct Shared(pub std::sync::Arc<std::sync::Mutex<FakeICloud>>);
+
+impl Remote for Shared {
+    fn list(&mut self) -> Result<Listing, StopReason> {
+        self.0.lock().expect("lock").list()
+    }
+
+    fn download(&mut self, path: &RelPath) -> Result<Download, RemoteError> {
+        self.0.lock().expect("lock").download(path)
+    }
+
+    fn write(
+        &mut self,
+        action: ApprovedAction,
+        content: Option<&mut dyn Read>,
+    ) -> Result<Option<Written>, RemoteError> {
+        // Slow enough that the workers overlap.
+        std::thread::sleep(Duration::from_millis(5));
+        self.0.lock().expect("lock").write(action, content)
+    }
+
+    fn fork(&mut self) -> Option<Box<dyn Remote + Send>> {
+        Some(Box::new(Shared(std::sync::Arc::clone(&self.0))))
     }
 }
