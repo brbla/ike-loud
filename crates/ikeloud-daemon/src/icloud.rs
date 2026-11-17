@@ -201,7 +201,14 @@ impl<T: Transport> ICloudRemote<T> {
 /// What a failed call means for the run.
 pub fn stop_reason(error: &ApiError) -> StopReason {
     match error {
-        ApiError::Transport(_) => StopReason::Offline,
+        // "Try again later" (503 RETRY when too many writes at once, 429,
+        // a gateway in between): like an outage, the run retries later with
+        // a growing wait. Never "unknown response" (that would stop sync).
+        ApiError::Transport(_)
+        | ApiError::Status {
+            status: 429 | 502 | 503 | 504,
+            ..
+        } => StopReason::Offline,
         ApiError::SessionExpired
         | ApiError::NotSignedIn
         | ApiError::BadCredentials
@@ -368,5 +375,30 @@ impl<T: Transport> Remote for ICloudRemote<T> {
         };
         self.saved();
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn busy_server_is_retried_not_an_unknown_answer() {
+        for status in [429, 502, 503, 504] {
+            let e = ApiError::Status {
+                call: "createFolders",
+                status,
+            };
+            assert_eq!(stop_reason(&e), StopReason::Offline, "{status}");
+            assert!(matches!(
+                write_error(&e),
+                RemoteError::Stop(StopReason::Offline)
+            ));
+        }
+        let e = ApiError::Status {
+            call: "x",
+            status: 500,
+        };
+        assert_eq!(stop_reason(&e), StopReason::UnknownResponse);
     }
 }
