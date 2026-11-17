@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 
-use ikeloud_config::Status;
+use ikeloud_config::{Request, Status};
 
 /// Exit code of the daemon when the sign-in expired.
 pub const EXIT_SIGNED_OUT: i32 = 3;
@@ -54,13 +54,21 @@ impl DaemonProcess {
         Ok(())
     }
 
-    /// Stops the daemon.
-    pub fn stop(&mut self, status: Option<&Status>) {
+    /// Stops the daemon: it finishes the transfers under way and records
+    /// them first (the service's ExecStop does the same).
+    pub fn stop(&mut self, status: Option<&Status>, request: &std::path::Path) {
         if self.service {
             let _ = systemctl(&["stop", SERVICE]);
             return;
         }
         if let Some(mut child) = self.child.take() {
+            let _ = Request::Stop.save(request);
+            for _ in 0..120 {
+                if matches!(child.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
             let _ = child.kill();
             let _ = child.wait();
             return;

@@ -150,6 +150,11 @@ impl Effects for RunEffects<'_> {
         if self.record_failed {
             return Err(EffectError::Stop(StopReason::LocalDisk));
         }
+        if crate::shutting_down() {
+            // A stop of the service: no new action; the run ends and the
+            // next start plans again.
+            return Err(EffectError::Stop(StopReason::Offline));
+        }
         let action = approved.action().clone();
         let mut ctx = Ctx {
             disk: self.disk,
@@ -211,7 +216,7 @@ impl Effects for RunEffects<'_> {
                         remote: &mut *fork,
                         now,
                     };
-                    while !stop.load(Ordering::SeqCst) {
+                    while !stop.load(Ordering::SeqCst) && !crate::shutting_down() {
                         let next = queue.lock().ok().and_then(|mut q| q.pop_front());
                         let Some((index, approved)) = next else { break };
                         let action = approved.action().clone();

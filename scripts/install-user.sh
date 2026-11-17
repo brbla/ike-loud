@@ -45,7 +45,8 @@ for name in ikeloud-gui ikeloud-daemon ikeloud-cli; do
 done
 
 # Absolute paths: ~/.local/bin need not be on the PATH of the session.
-sed "s|^ExecStart=.*|ExecStart=$BIN/ikeloud-daemon|" packaging/systemd/ikeloud.service \
+sed -e "s|^ExecStart=.*|ExecStart=$BIN/ikeloud-daemon|" \
+    -e "s|^ExecStop=[^ ]*|ExecStop=$BIN/ikeloud-daemon|" packaging/systemd/ikeloud.service \
     | install -Dm644 /dev/stdin "$SERVICE"
 # The icon by its full path: menus and the window overview then need no
 # icon theme lookup, which caches (GTK's, Plasma's) can hide.
