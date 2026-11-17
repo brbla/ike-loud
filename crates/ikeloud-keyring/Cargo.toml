@@ -1,0 +1,18 @@
+[package]
+name = "ikeloud-keyring"
+description = "The signed-in session in the desktop keyring (Secret Service), with a private file as the fallback."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ikeloud-config = { path = "../ikeloud-config" }
+# D-Bus to the Secret Service (KWallet's ksecretd, GNOME Keyring). The same
+# GLib/GIO the app's GTK uses; no further library (decision 0024).
+gio = { version = "=0.22.11", default-features = false }
+glib = { version = "=0.22.11", default-features = false }

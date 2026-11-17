@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 ikeloud-api = { path = "../ikeloud-api" }
 ikeloud-config = { path = "../ikeloud-config" }
+ikeloud-keyring = { path = "../ikeloud-keyring" }
 ikeloud-i18n = { path = "../ikeloud-i18n" }
 # Plain GTK 4 (decision 0022): follows the desktop's GTK theme. GLib and GIO
 # come through gtk4's re-exports (gtk::glib, gtk::gio): D-Bus for the tray.

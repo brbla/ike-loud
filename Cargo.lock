@@ -590,6 +590,7 @@ version = "0.0.0"
 dependencies = [
  "ikeloud-api",
  "ikeloud-config",
+ "ikeloud-keyring",
 ]
 
 [[package]]
@@ -604,6 +605,7 @@ dependencies = [
  "ikeloud-config",
  "ikeloud-hash",
  "ikeloud-i18n",
+ "ikeloud-keyring",
  "ikeloud-local",
  "ikeloud-safety",
  "ikeloud-state",
@@ -618,6 +620,7 @@ dependencies = [
  "ikeloud-api",
  "ikeloud-config",
  "ikeloud-i18n",
+ "ikeloud-keyring",
 ]
 
 [[package]]
@@ -637,6 +640,15 @@ dependencies = [
  "ikeloud-sync",
  "ikeloud-testkit",
  "unic-langid",
+]
+
+[[package]]
+name = "ikeloud-keyring"
+version = "0.0.0"
+dependencies = [
+ "gio",
+ "glib",
+ "ikeloud-config",
 ]
 
 [[package]]

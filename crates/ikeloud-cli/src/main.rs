@@ -38,7 +38,8 @@ use std::process::ExitCode;
 use ikeloud_api::{
     ApiError, Client, HttpsTransport, Item, Kind, ROOT, SavedSession, SignIn, UploadTarget,
 };
-use ikeloud_config::{Paths, write_private};
+use ikeloud_config::Paths;
+use ikeloud_keyring::SessionStore;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -75,18 +76,20 @@ fn main() -> ExitCode {
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-fn session_path() -> Result<PathBuf> {
-    Ok(Paths::from_env()?.session)
+/// The session store: the keyring, or the private file without one.
+fn store() -> Result<SessionStore> {
+    Ok(SessionStore::new(&Paths::from_env()?))
 }
 
 fn save(client: &Client<HttpsTransport>) -> Result<()> {
-    write_private(&session_path()?, client.saved().to_json().as_bytes())?;
+    store()?.save(&client.saved().to_json());
     Ok(())
 }
 
 fn load() -> Result<Client<HttpsTransport>> {
-    let text = fs::read_to_string(session_path()?)
-        .map_err(|_| "not signed in; run: ikeloud-cli login <apple-account>")?;
+    let text = store()?
+        .load()
+        .ok_or("not signed in; run: ikeloud-cli login <apple-account>")?;
     let saved =
         SavedSession::from_json(&text).ok_or("the saved session is damaged; sign in again")?;
     let mut client = Client::restore(HttpsTransport::new(), saved);
@@ -111,9 +114,9 @@ fn read_line(prompt: &str) -> Result<String> {
 
 fn login(account: &str) -> Result<()> {
     // Keep the trust token of an earlier sign-in, so the SMS can be skipped.
-    let previous = session_path()
+    let previous = store()
         .ok()
-        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|s| s.load())
         .and_then(|t| SavedSession::from_json(&t))
         .filter(|s| s.account_name() == account);
     let mut client = match previous {
