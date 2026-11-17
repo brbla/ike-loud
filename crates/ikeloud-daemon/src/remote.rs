@@ -63,4 +63,14 @@ pub trait Remote {
         action: ApprovedAction,
         content: Option<&mut dyn Read>,
     ) -> Result<Option<Written>, RemoteError>;
+
+    /// A copy for a worker thread, to carry out independent actions at once
+    /// (decision 0025); `None`: this remote works one action at a time.
+    fn fork(&mut self) -> Option<Box<dyn Remote + Send>> {
+        None
+    }
+
+    /// A fork uploaded `path` (for counting what the main remote did not
+    /// see itself).
+    fn uploaded_elsewhere(&mut self, _path: &RelPath) {}
 }

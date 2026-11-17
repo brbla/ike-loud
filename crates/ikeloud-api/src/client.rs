@@ -255,6 +255,11 @@ impl<T: Transport> Client<T> {
         }
     }
 
+    /// The transport (to make another client with the same connections).
+    pub fn transport(&self) -> &T {
+        &self.transport
+    }
+
     /// The session to save (after every successful call that may change it).
     pub fn saved(&self) -> &SavedSession {
         &self.state

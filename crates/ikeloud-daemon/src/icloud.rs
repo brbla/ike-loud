@@ -5,13 +5,19 @@
 //! write ("name taken", "another version") changes nothing on the server
 //! and is [`RemoteError::Changed`]; the next run plans again.
 //!
-//! Listing walks the whole tree folder by folder. Any failure fails the
-//! whole listing: a partial listing would look like deleted files (spec:
-//! an empty or odd listing is an API error, not deleted content). The same
-//! holds for a name that is not a usable path component: one odd name stops
-//! the run rather than hiding a file.
+//! Listing walks the whole tree, 25 folders per request. Any failure fails
+//! the whole listing: a partial listing would look like deleted files
+//! (spec: an empty or odd listing is an API error, not deleted content).
+//! The same holds for a name that is not a usable path component: one odd
+//! name stops the run rather than hiding a file.
+//!
+//! Independent transfers may run at once ([`Remote::fork`], decision 0025):
+//! each fork has its own client with the same session and shares the maps
+//! of folders and files; the session a fork ends with comes back to the
+//! main remote, which saves it.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use ikeloud_api::http::Transport;
 use ikeloud_api::{ApiError, Client, Item, Kind, ROOT, SavedSession, UploadTarget};
@@ -19,42 +25,6 @@ use ikeloud_safety::{Action, ApprovedAction, Etag, RelPath};
 use ikeloud_sync::{DocId, RemoteFile, StopReason};
 
 use crate::remote::{Download, Listing, Remote, RemoteError, Written};
-
-/// The real server.
-pub struct ICloudRemote<T: Transport> {
-    client: Client<T>,
-    /// Files of the last listing (and written since), by path.
-    items: BTreeMap<RelPath, Item>,
-    /// Folders of the last listing (and created since), by path; "" is the
-    /// root.
-    folders: BTreeMap<String, Folder>,
-    /// Called whenever the session may have changed (new cookies), to save it.
-    on_session: Box<dyn FnMut(&SavedSession)>,
-}
-
-impl<T: Transport> std::fmt::Debug for ICloudRemote<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ICloudRemote")
-            .field("items", &self.items.len())
-            .finish_non_exhaustive()
-    }
-}
-
-impl<T: Transport> ICloudRemote<T> {
-    /// Remote over a signed-in client.
-    pub fn new(client: Client<T>, on_session: Box<dyn FnMut(&SavedSession)>) -> Self {
-        Self {
-            client,
-            items: BTreeMap::new(),
-            folders: root_only(),
-            on_session,
-        }
-    }
-
-    fn saved(&mut self) {
-        (self.on_session)(self.client.saved());
-    }
-}
 
 /// Folders listed per request.
 const LIST_BATCH: usize = 25;
@@ -65,6 +35,24 @@ struct Folder {
     drivewsid: String,
     docwsid: String,
     etag: String,
+}
+
+/// What the last listing found, and what was written since.
+#[derive(Debug)]
+struct Maps {
+    /// Files, by path.
+    items: BTreeMap<RelPath, Item>,
+    /// Folders, by path; "" is the root.
+    folders: BTreeMap<String, Folder>,
+}
+
+impl Default for Maps {
+    fn default() -> Self {
+        Self {
+            items: BTreeMap::new(),
+            folders: root_only(),
+        }
+    }
 }
 
 fn root_only() -> BTreeMap<String, Folder> {
@@ -78,6 +66,71 @@ fn root_only() -> BTreeMap<String, Folder> {
         },
     );
     folders
+}
+
+/// A client and the shared maps: what the main remote and its forks have in
+/// common.
+struct Core<T: Transport> {
+    client: Client<T>,
+    maps: Arc<Mutex<Maps>>,
+}
+
+/// The real server.
+pub struct ICloudRemote<T: Transport> {
+    core: Core<T>,
+    /// The session a fork ended with, newer than the main client's.
+    latest: Arc<Mutex<Option<SavedSession>>>,
+    /// Called whenever the session may have changed (new cookies), to save it.
+    on_session: Box<dyn FnMut(&SavedSession)>,
+}
+
+/// A copy of the remote for one worker thread.
+struct Forked<T: Transport> {
+    core: Core<T>,
+    latest: Arc<Mutex<Option<SavedSession>>>,
+}
+
+impl<T: Transport> std::fmt::Debug for ICloudRemote<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ICloudRemote").finish_non_exhaustive()
+    }
+}
+
+fn lock(maps: &Mutex<Maps>) -> MutexGuard<'_, Maps> {
+    // A worker that panicked while holding the lock left consistent maps
+    // (every change is one insert or remove): keep going.
+    maps.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl<T: Transport> ICloudRemote<T> {
+    /// Remote over a signed-in client.
+    pub fn new(client: Client<T>, on_session: Box<dyn FnMut(&SavedSession)>) -> Self {
+        Self {
+            core: Core {
+                client,
+                maps: Arc::new(Mutex::new(Maps::default())),
+            },
+            latest: Arc::new(Mutex::new(None)),
+            on_session,
+        }
+    }
+
+    fn saved(&mut self) {
+        (self.on_session)(self.core.client.saved());
+    }
+}
+
+impl<T: Transport + Clone> ICloudRemote<T> {
+    /// Takes over the session a fork ended with (cookies may have rotated).
+    fn catch_up(&mut self) {
+        let newer = self.latest.lock().ok().and_then(|mut l| l.take());
+        if let Some(session) = newer {
+            let transport = self.core.client.transport().clone();
+            self.core.client = Client::restore(transport, session);
+            self.saved();
+        }
+    }
 }
 
 /// A refused write wrote nothing: the plan no longer fits.
@@ -97,9 +150,13 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-impl<T: Transport> ICloudRemote<T> {
+impl<T: Transport> Core<T> {
     fn folder(&self, path: &str) -> Result<Folder, RemoteError> {
-        self.folders.get(path).cloned().ok_or(RemoteError::Changed)
+        lock(&self.maps)
+            .folders
+            .get(path)
+            .cloned()
+            .ok_or(RemoteError::Changed)
     }
 
     fn upload(
@@ -115,10 +172,14 @@ impl<T: Transport> ICloudRemote<T> {
                 folder_docwsid: parent.docwsid.clone(),
             },
             Some(expected) => {
-                let item = self.items.get(path).ok_or(RemoteError::Changed)?;
+                let docwsid = lock(&self.maps)
+                    .items
+                    .get(path)
+                    .map(|i| i.docwsid.clone())
+                    .ok_or(RemoteError::Changed)?;
                 UploadTarget::Replace {
                     folder_docwsid: parent.docwsid.clone(),
-                    docwsid: item.docwsid.clone(),
+                    docwsid,
                     etag: expected.as_str().to_string(),
                 }
             }
@@ -127,7 +188,7 @@ impl<T: Transport> ICloudRemote<T> {
             .client
             .upload(&target, path.name(), size, content, now_ms())
             .map_err(|e| write_error(&e))?;
-        self.items.insert(
+        lock(&self.maps).items.insert(
             path.clone(),
             Item {
                 drivewsid: format!("FILE::com.apple.CloudDocs::{}", uploaded.docwsid),
@@ -148,7 +209,7 @@ impl<T: Transport> ICloudRemote<T> {
 
     /// Drive id and version of a file or folder at `path`.
     fn item_ids(&self, path: &RelPath) -> Result<(String, String), RemoteError> {
-        if let Some(item) = self.items.get(path) {
+        if let Some(item) = lock(&self.maps).items.get(path) {
             return Ok((item.drivewsid.clone(), item.etag.clone()));
         }
         let folder = self.folder(path.as_str())?;
@@ -190,11 +251,91 @@ impl<T: Transport> ICloudRemote<T> {
                 .rename(&drivewsid, &etag, to.name())
                 .map_err(|e| write_error(&e))?;
         }
-        if let Some(mut item) = self.items.remove(from) {
+        let mut maps = lock(&self.maps);
+        if let Some(mut item) = maps.items.remove(from) {
             item.name = to.name().to_string();
-            self.items.insert(to.clone(), item);
+            maps.items.insert(to.clone(), item);
         }
         Ok(())
+    }
+
+    fn download(&mut self, path: &RelPath) -> Result<Download, RemoteError> {
+        let item = lock(&self.maps)
+            .items
+            .get(path)
+            .cloned()
+            .ok_or(RemoteError::Changed)?;
+        let opened = self.client.open_download(&item).map_err(|e| match e {
+            // The listing is older than the file: the next run sees why.
+            ApiError::Status { status: 404, .. } => RemoteError::Changed,
+            e => RemoteError::Stop(stop_reason(&e)),
+        })?;
+        // The version being read is the one the server reports now; when it
+        // differs from the planned one, the effects write nothing.
+        let etag = opened.etag.unwrap_or(item.etag);
+        Ok(Download {
+            doc_id: DocId::new(item.docwsid),
+            etag: Etag::new(etag),
+            content: opened.content,
+        })
+    }
+
+    fn write(
+        &mut self,
+        approved: &ApprovedAction,
+        content: Option<&mut dyn std::io::Read>,
+    ) -> Result<Option<Written>, RemoteError> {
+        match approved.action() {
+            Action::Upload {
+                remote,
+                expected_etag,
+                size,
+                ..
+            } => match content {
+                Some(content) => self.upload(remote, expected_etag.as_ref(), *size, content),
+                None => Err(RemoteError::Stop(StopReason::LocalDisk)),
+            },
+            Action::UploadConflictCopy { path, size, .. } => match content {
+                Some(content) => self.upload(path, None, *size, content),
+                None => Err(RemoteError::Stop(StopReason::LocalDisk)),
+            },
+            Action::CreateRemoteFolder { path } => {
+                let parent = self.folder(path.parent())?;
+                let created = self
+                    .client
+                    .create_folder(&parent.drivewsid, path.name())
+                    .map_err(|e| write_error(&e))?;
+                lock(&self.maps).folders.insert(
+                    path.as_str().to_string(),
+                    Folder {
+                        drivewsid: created.drivewsid,
+                        docwsid: created.docwsid,
+                        etag: created.etag,
+                    },
+                );
+                Ok(None)
+            }
+            Action::TrashRemote {
+                path,
+                expected_etag,
+            } => {
+                let (drivewsid, _) = self.item_ids(path)?;
+                self.client
+                    .trash(&drivewsid, expected_etag.as_str())
+                    .map_err(|e| write_error(&e))?;
+                lock(&self.maps).items.remove(path);
+                Ok(None)
+            }
+            Action::MoveRemote {
+                from,
+                to,
+                expected_etag,
+            } => self.move_remote(from, to, expected_etag).map(|()| None),
+            // Local actions never reach the server.
+            Action::Download { .. } | Action::TrashLocal { .. } | Action::MoveLocal { .. } => {
+                Err(RemoteError::Stop(StopReason::UnknownResponse))
+            }
+        }
     }
 }
 
@@ -238,11 +379,11 @@ fn child(parent: Option<&RelPath>, name: &str) -> Option<RelPath> {
     }
 }
 
-impl<T: Transport> Remote for ICloudRemote<T> {
+impl<T: Transport + Clone + Send + 'static> Remote for ICloudRemote<T> {
     fn list(&mut self) -> Result<Listing, StopReason> {
+        self.catch_up();
         let mut listing = Listing::default();
-        let mut items = BTreeMap::new();
-        let mut folders = root_only();
+        let mut maps = Maps::default();
         let mut queue: VecDeque<(String, Option<RelPath>)> = VecDeque::new();
         queue.push_back((ROOT.to_string(), None));
         while !queue.is_empty() {
@@ -251,7 +392,7 @@ impl<T: Transport> Remote for ICloudRemote<T> {
             let batch: Vec<(String, Option<RelPath>)> =
                 queue.drain(..queue.len().min(LIST_BATCH)).collect();
             let ids: Vec<String> = batch.iter().map(|(id, _)| id.clone()).collect();
-            let listed = self.client.list_folders(&ids);
+            let listed = self.core.client.list_folders(&ids);
             self.saved();
             let listed = listed.map_err(|e| stop_reason(&e))?;
             for (folder, (_, path)) in listed.into_iter().zip(batch) {
@@ -265,7 +406,7 @@ impl<T: Transport> Remote for ICloudRemote<T> {
                         child(path.as_ref(), &item.name).ok_or(StopReason::UnknownResponse)?;
                     match item.kind {
                         Kind::Folder => {
-                            folders.insert(
+                            maps.folders.insert(
                                 item_path.as_str().to_string(),
                                 Folder {
                                     drivewsid: item.drivewsid.clone(),
@@ -283,35 +424,22 @@ impl<T: Transport> Remote for ICloudRemote<T> {
                                 etag: Etag::new(item.etag.clone()),
                                 size: item.size.unwrap_or(0),
                             });
-                            items.insert(item_path, item);
+                            maps.items.insert(item_path, item);
                         }
                         Kind::Other => {}
                     }
                 }
             }
         }
-        self.items = items;
-        self.folders = folders;
+        *lock(&self.core.maps) = maps;
         Ok(listing)
     }
 
     fn download(&mut self, path: &RelPath) -> Result<Download, RemoteError> {
-        let item = self.items.get(path).cloned().ok_or(RemoteError::Changed)?;
-        let opened = self.client.open_download(&item);
+        self.catch_up();
+        let result = self.core.download(path);
         self.saved();
-        let opened = opened.map_err(|e| match e {
-            // The listing is older than the file: the next run sees why.
-            ApiError::Status { status: 404, .. } => RemoteError::Changed,
-            e => RemoteError::Stop(stop_reason(&e)),
-        })?;
-        // The version being read is the one the server reports now; when it
-        // differs from the planned one, the effects write nothing.
-        let etag = opened.etag.unwrap_or(item.etag);
-        Ok(Download {
-            doc_id: DocId::new(item.docwsid),
-            etag: Etag::new(etag),
-            content: opened.content,
-        })
+        result
     }
 
     fn write(
@@ -319,61 +447,55 @@ impl<T: Transport> Remote for ICloudRemote<T> {
         approved: ApprovedAction,
         content: Option<&mut dyn std::io::Read>,
     ) -> Result<Option<Written>, RemoteError> {
-        let result = match approved.action() {
-            Action::Upload {
-                remote,
-                expected_etag,
-                size,
-                ..
-            } => match content {
-                Some(content) => self.upload(remote, expected_etag.as_ref(), *size, content),
-                None => Err(RemoteError::Stop(StopReason::LocalDisk)),
-            },
-            Action::UploadConflictCopy { path, size, .. } => match content {
-                Some(content) => self.upload(path, None, *size, content),
-                None => Err(RemoteError::Stop(StopReason::LocalDisk)),
-            },
-            Action::CreateRemoteFolder { path } => match self.folder(path.parent()) {
-                Ok(parent) => self
-                    .client
-                    .create_folder(&parent.drivewsid, path.name())
-                    .map(|created| {
-                        self.folders.insert(
-                            path.as_str().to_string(),
-                            Folder {
-                                drivewsid: created.drivewsid,
-                                docwsid: created.docwsid,
-                                etag: created.etag,
-                            },
-                        );
-                        None
-                    })
-                    .map_err(|e| write_error(&e)),
-                Err(e) => Err(e),
-            },
-            Action::TrashRemote {
-                path,
-                expected_etag,
-            } => self.item_ids(path).and_then(|(drivewsid, _)| {
-                self.client
-                    .trash(&drivewsid, expected_etag.as_str())
-                    .map(|()| {
-                        self.items.remove(path);
-                        None
-                    })
-                    .map_err(|e| write_error(&e))
-            }),
-            Action::MoveRemote {
-                from,
-                to,
-                expected_etag,
-            } => self.move_remote(from, to, expected_etag).map(|()| None),
-            // Local actions never reach the server.
-            Action::Download { .. } | Action::TrashLocal { .. } | Action::MoveLocal { .. } => {
-                Err(RemoteError::Stop(StopReason::UnknownResponse))
-            }
-        };
+        self.catch_up();
+        let result = self.core.write(&approved, content);
         self.saved();
+        result
+    }
+
+    fn fork(&mut self) -> Option<Box<dyn Remote + Send>> {
+        self.catch_up();
+        let client = Client::restore(
+            self.core.client.transport().clone(),
+            self.core.client.saved().clone(),
+        );
+        Some(Box::new(Forked {
+            core: Core {
+                client,
+                maps: Arc::clone(&self.core.maps),
+            },
+            latest: Arc::clone(&self.latest),
+        }))
+    }
+}
+
+impl<T: Transport + Send> Forked<T> {
+    fn hand_back(&mut self) {
+        if let Ok(mut latest) = self.latest.lock() {
+            *latest = Some(self.core.client.saved().clone());
+        }
+    }
+}
+
+impl<T: Transport + Send> Remote for Forked<T> {
+    fn list(&mut self) -> Result<Listing, StopReason> {
+        // Forks only carry out actions; listing is the main remote's.
+        Err(StopReason::UnknownResponse)
+    }
+
+    fn download(&mut self, path: &RelPath) -> Result<Download, RemoteError> {
+        let result = self.core.download(path);
+        self.hand_back();
+        result
+    }
+
+    fn write(
+        &mut self,
+        approved: ApprovedAction,
+        content: Option<&mut dyn std::io::Read>,
+    ) -> Result<Option<Written>, RemoteError> {
+        let result = self.core.write(&approved, content);
+        self.hand_back();
         result
     }
 }
