@@ -391,6 +391,7 @@ impl World {
             ),
             settle_time: DEFAULT_SETTLE_TIME,
             conflict_name: &copy_name,
+            mode: ikeloud_safety::Mode::Full,
         };
         let now = SystemTime::now() + Duration::from_secs(60);
         let mut server = Server {

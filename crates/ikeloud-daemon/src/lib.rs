@@ -12,11 +12,13 @@
 
 mod daemon;
 mod effects;
+mod icloud;
 mod remote;
 mod run;
 mod schedule;
 
 pub use daemon::{Daemon, Event, Status, spawn_watcher};
+pub use icloud::{ICloudRemote, stop_reason};
 pub use remote::{Download, Listing, Remote, RemoteError, Written};
 pub use run::{ExecutedRun, RunOutcome, RunReport, Started, SyncSetup, start_run, sync_once};
 pub use schedule::{RunResult, Schedule, Timing};

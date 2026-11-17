@@ -109,6 +109,7 @@ impl Running {
                 ),
                 settle_time: Duration::from_millis(200),
                 conflict_name: &copy_name,
+                mode: ikeloud_safety::Mode::Full,
             };
             let timing = Timing {
                 quiet: Duration::from_millis(300),
