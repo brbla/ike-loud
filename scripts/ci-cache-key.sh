@@ -35,8 +35,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Bump when the meaning of the cache changes (layout, cleaning rules).
 SCHEMA=4
 
-# Names of environment variables that can affect compilation.
-ENV_PATTERN='CARGO_[A-Z0-9_]+|RUST[A-Z0-9_]*|CC|CC_[A-Za-z0-9_]+|CXX|CXX_[A-Za-z0-9_]+|CFLAGS[A-Za-z0-9_]*|CXXFLAGS[A-Za-z0-9_]*|CPPFLAGS[A-Za-z0-9_]*|LDFLAGS[A-Za-z0-9_]*|AR|AR_[A-Za-z0-9_]+|ARFLAGS[A-Za-z0-9_]*|RANLIB[A-Za-z0-9_]*|TARGET_[A-Za-z0-9_]+|HOST_[A-Za-z0-9_]+|CRATE_CC_[A-Z0-9_]+|PKG_CONFIG[A-Za-z0-9_]*|LIBSQLITE3[A-Z0-9_]*|SQLITE[A-Z0-9_]*|VCPKG[A-Z0-9_]*|LIBC_[A-Z0-9_]+|DEP_[A-Z0-9_]+|DOCS_RS|NUM_JOBS|OPT_LEVEL|DEBUG|PROFILE'
+# Names of environment variables that can affect compilation. RING_* and
+# PERL_EXECUTABLE: read by the build script of ring (TLS) without
+# rerun-if-env-changed.
+ENV_PATTERN='CARGO_[A-Z0-9_]+|RUST[A-Z0-9_]*|CC|CC_[A-Za-z0-9_]+|CXX|CXX_[A-Za-z0-9_]+|CFLAGS[A-Za-z0-9_]*|CXXFLAGS[A-Za-z0-9_]*|CPPFLAGS[A-Za-z0-9_]*|LDFLAGS[A-Za-z0-9_]*|AR|AR_[A-Za-z0-9_]+|ARFLAGS[A-Za-z0-9_]*|RANLIB[A-Za-z0-9_]*|TARGET_[A-Za-z0-9_]+|HOST_[A-Za-z0-9_]+|CRATE_CC_[A-Z0-9_]+|PKG_CONFIG[A-Za-z0-9_]*|LIBSQLITE3[A-Z0-9_]*|SQLITE[A-Z0-9_]*|VCPKG[A-Z0-9_]*|LIBC_[A-Z0-9_]+|RING_[A-Z0-9_]+|PERL_EXECUTABLE|DEP_[A-Z0-9_]+|DOCS_RS|NUM_JOBS|OPT_LEVEL|DEBUG|PROFILE'
 
 # First line of a command's output. Reads all output first: piping into
 # `head` would race with pipefail (SIGPIPE) and make the key nondeterministic.

@@ -14,4 +14,11 @@ workspace = true
 ikeloud-hash = { path = "../ikeloud-hash" }
 # SRP-6a sign-in, Apple variant (src/srp.rs wraps all four).
 num-bigint = { version = "=0.4.6", default-features = false, features = ["std"] }
-getrandom = { version = "=0.3.4", default-features = false }
+# 0.2, not 0.3: ring (TLS) needs 0.2 and deny.toml allows one version only.
+getrandom = { version = "=0.2.17", default-features = false }
+# HTTPS: blocking HTTP/1.1 client over rustls (ring) with the Mozilla root
+# certificates compiled in (webpki-roots); no system OpenSSL (decision 0021).
+ureq = { version = "=3.5.2", default-features = false, features = ["rustls"] }
+# JSON bodies of the iCloud web services.
+serde = { version = "=1.0.229", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "=1.0.154", default-features = false, features = ["std"] }

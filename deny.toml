@@ -20,6 +20,9 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    # webpki-roots: the Mozilla root certificates compiled into the TLS
+    # client (ikeloud-api, decision 0021). A permissive data licence.
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]

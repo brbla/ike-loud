@@ -11,3 +11,4 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+ikeloud-api = { path = "../ikeloud-api" }

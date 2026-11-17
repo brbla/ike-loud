@@ -86,7 +86,7 @@ check "vendored crate added" different sh -c 'mkdir -p vendor/new-1.0.0 && echo 
 check "new workspace crate" different sh -c 'mkdir -p crates/new && echo "[package]" > crates/new/Cargo.toml'
 for var in RUSTFLAGS RUSTC_WRAPPER CARGO_INCREMENTAL CARGO_PROFILE_DEV_OPT_LEVEL CC CC_x86_64_unknown_linux_gnu \
     CFLAGS CFLAGS_x86_64_unknown_linux_gnu TARGET_CC HOST_CFLAGS CRATE_CC_NO_DEFAULTS AR LDFLAGS \
-    PKG_CONFIG_PATH LIBSQLITE3_FLAGS SQLITE3_LIB_DIR ImageOS; do
+    PKG_CONFIG_PATH LIBSQLITE3_FLAGS SQLITE3_LIB_DIR RING_PREGENERATE_ASM PERL_EXECUTABLE ImageOS; do
     check "env $var" different export "$var=changed"
 done
 
