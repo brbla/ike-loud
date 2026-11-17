@@ -35,7 +35,10 @@ fi
 cd "$ROOT"
 cargo build --release --locked --offline -p ikeloud-gui -p ikeloud-daemon -p ikeloud-cli
 
-# A running daemon keeps its old binary open; stop it for the update.
+# A running daemon keeps its old binary open; stop it for the update and
+# start it again afterwards.
+was_active=no
+systemctl --user is-active --quiet ikeloud.service 2>/dev/null && was_active=yes
 systemctl --user stop ikeloud.service 2>/dev/null || true
 for name in ikeloud-gui ikeloud-daemon ikeloud-cli; do
     install -Dm755 "target/release/$name" "$BIN/$name"
@@ -63,5 +66,6 @@ command -v update-desktop-database >/dev/null && update-desktop-database "$DATA/
 # cannot rebuild its cache there: remove a stale one (lookups then scan).
 rm -f "$DATA/icons/hicolor/icon-theme.cache"
 command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 >/dev/null 2>&1 || true
+[ "$was_active" = yes ] && systemctl --user start ikeloud.service
 
 echo "ike loud installed: start it from the menu (or run $BIN/ikeloud-gui)."

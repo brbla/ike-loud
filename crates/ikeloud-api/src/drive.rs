@@ -156,31 +156,53 @@ impl From<RawItem> for Item {
 impl<T: Transport> Client<T> {
     /// Lists a folder (one level).
     pub fn list_folder(&mut self, drivewsid: &str) -> Result<Folder, ApiError> {
+        self.list_folders(&[drivewsid.to_string()])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| ApiError::Malformed {
+                call: "retrieveItemDetailsInFolders",
+                what: "the folder is missing in the response".to_string(),
+            })
+    }
+
+    /// Lists several folders (one level each) in one request, in the order
+    /// asked. Every folder must be in the answer, or the call fails: a
+    /// missing folder must never look like an empty one.
+    pub fn list_folders(&mut self, drivewsids: &[String]) -> Result<Vec<Folder>, ApiError> {
         let account = self.account().ok_or(ApiError::NotSignedIn)?.clone();
         let url = format!(
             "{}/retrieveItemDetailsInFolders?dsid={}",
             account.drivews, account.dsid
         );
-        let body = json!([{"drivewsid": drivewsid, "partialData": false}]);
-        let folders: Vec<RawFolder> = self.web_json(
+        let body: Vec<serde_json::Value> = drivewsids
+            .iter()
+            .map(|id| json!({"drivewsid": id, "partialData": false}))
+            .collect();
+        let mut folders: Vec<RawFolder> = self.web_json(
             "retrieveItemDetailsInFolders",
             Method::Post,
             &url,
-            Some(body),
+            Some(serde_json::Value::Array(body)),
         )?;
-        let raw = folders
-            .into_iter()
-            .find(|f| f.drivewsid == drivewsid)
-            .ok_or_else(|| ApiError::Malformed {
-                call: "retrieveItemDetailsInFolders",
-                what: "the folder is missing in the response".to_string(),
-            })?;
-        Ok(Folder {
-            drivewsid: raw.drivewsid,
-            name: raw.name,
-            etag: raw.etag,
-            items: raw.items.into_iter().map(Item::from).collect(),
-        })
+        drivewsids
+            .iter()
+            .map(|id| {
+                let index = folders
+                    .iter()
+                    .position(|f| &f.drivewsid == id)
+                    .ok_or_else(|| ApiError::Malformed {
+                        call: "retrieveItemDetailsInFolders",
+                        what: "a folder is missing in the response".to_string(),
+                    })?;
+                let raw = folders.swap_remove(index);
+                Ok(Folder {
+                    drivewsid: raw.drivewsid,
+                    name: raw.name,
+                    etag: raw.etag,
+                    items: raw.items.into_iter().map(Item::from).collect(),
+                })
+            })
+            .collect()
     }
 
     /// Opens a file for reading. The stream fails with

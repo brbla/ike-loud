@@ -6,8 +6,10 @@ Datum: 2026-11-17 · Milník 1
 
 Přihlášená relace (cookies a důvěryhodný token; heslo nikdy) je v
 klíčence systému přes D-Bus rozhraní Secret Service: na Plasmě
-`ksecretd` (KWallet), na GNOME GNOME Keyring. Jedna položka s atributy
-`application=io.github.brbla.IkeLoud`, `type=session`.
+`ksecretd` (KWallet), na GNOME GNOME Keyring. Jedna položka na profil s atributy
+`application=io.github.brbla.IkeLoud`, `type=session` a `profile` (cesta
+k souboru relace), takže testovací profil vedle instalace nesdílí relaci.
+Položku bez profilu (první verze) převezme profil, který svou nenajde.
 
 - Crate `ikeloud-keyring` nad GIO D-Bus: stejné GLib/GIO, které už
   aplikace má kvůli GTK; žádná nová knihovna ve `vendor/`. Démon je tím

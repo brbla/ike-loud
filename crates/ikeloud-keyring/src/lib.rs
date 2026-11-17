@@ -20,14 +20,17 @@ const IFACE: &str = "org.freedesktop.Secret.Service";
 const DEFAULT: &str = "/org/freedesktop/secrets/aliases/default";
 const TIMEOUT_MS: i32 = 10_000;
 
-/// Attributes of our item of `kind` ("session"; tests use their own).
-fn attributes(kind: &str) -> HashMap<String, String> {
+/// Attributes of our item of `kind` ("session"; tests use their own) for
+/// one profile (its session file): two profiles of one user, e.g. a test
+/// setup next to the installed app, never share a session.
+fn attributes(kind: &str, profile: &str) -> HashMap<String, String> {
     HashMap::from([
         (
             "application".to_string(),
             "io.github.brbla.IkeLoud".to_string(),
         ),
         ("type".to_string(), kind.to_string()),
+        ("profile".to_string(), profile.to_string()),
     ])
 }
 
@@ -62,6 +65,7 @@ pub struct Keyring {
     bus: gio::DBusConnection,
     session: Variant,
     kind: &'static str,
+    profile: String,
 }
 
 impl std::fmt::Debug for Keyring {
@@ -72,12 +76,12 @@ impl std::fmt::Debug for Keyring {
 
 impl Keyring {
     /// Connects and opens a session, for the signed-in session item.
-    pub fn open() -> Result<Self, KeyringError> {
-        Self::open_kind("session")
+    pub fn open(profile: &str) -> Result<Self, KeyringError> {
+        Self::open_kind("session", profile)
     }
 
     /// Connects for the item of `kind` (tests use their own kind).
-    pub fn open_kind(kind: &'static str) -> Result<Self, KeyringError> {
+    pub fn open_kind(kind: &'static str, profile: &str) -> Result<Self, KeyringError> {
         let bus = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)?;
         let reply = call(
             &bus,
@@ -87,16 +91,28 @@ impl Keyring {
             &("plain", Variant::from_variant(&"".to_variant())).to_variant(),
         )?;
         let session = reply.child_value(1);
-        Ok(Self { bus, session, kind })
+        Ok(Self {
+            bus,
+            session,
+            kind,
+            profile: profile.to_string(),
+        })
     }
 
     fn search(&self) -> Result<(Vec<Variant>, Vec<Variant>), KeyringError> {
+        self.search_with(attributes(self.kind, &self.profile))
+    }
+
+    fn search_with(
+        &self,
+        attributes: HashMap<String, String>,
+    ) -> Result<(Vec<Variant>, Vec<Variant>), KeyringError> {
         let reply = call(
             &self.bus,
             PATH,
             IFACE,
             "SearchItems",
-            &(attributes(self.kind),).to_variant(),
+            &(attributes,).to_variant(),
         )?;
         let paths = |i: usize| -> Vec<Variant> {
             let list = reply.child_value(i);
@@ -110,6 +126,65 @@ impl Keyring {
     /// The stored session, if any.
     pub fn load(&self) -> Result<Option<Vec<u8>>, KeyringError> {
         let (unlocked, locked) = self.search()?;
+        if unlocked.is_empty() && locked.is_empty() {
+            return self.take_legacy();
+        }
+        self.read(&unlocked, &locked)
+    }
+
+    /// An item stored before items had a profile (one release, on the
+    /// owner's machine): moved under this profile, the old one deleted.
+    fn take_legacy(&self) -> Result<Option<Vec<u8>>, KeyringError> {
+        let mut legacy = attributes(self.kind, "");
+        legacy.remove("profile");
+        let (unlocked, locked) = self.search_with(legacy)?;
+        let without_profile = |items: &[Variant]| -> Vec<Variant> {
+            items
+                .iter()
+                .filter(|item| !self.has_profile(item))
+                .cloned()
+                .collect()
+        };
+        let (unlocked, locked) = (without_profile(&unlocked), without_profile(&locked));
+        let Some(secret) = self.read(&unlocked, &locked)? else {
+            return Ok(None);
+        };
+        self.store(&secret)?;
+        for item in unlocked.iter().chain(locked.iter()) {
+            if let Some(path) = item.str() {
+                let _ = call(
+                    &self.bus,
+                    path,
+                    "org.freedesktop.Secret.Item",
+                    "Delete",
+                    &().to_variant(),
+                );
+            }
+        }
+        Ok(Some(secret))
+    }
+
+    fn has_profile(&self, item: &Variant) -> bool {
+        let Some(path) = item.str() else { return true };
+        let reply = call(
+            &self.bus,
+            path,
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            &("org.freedesktop.Secret.Item", "Attributes").to_variant(),
+        );
+        reply
+            .ok()
+            .and_then(|r| r.child_value(0).as_variant())
+            .and_then(|v| v.get::<HashMap<String, String>>())
+            .is_none_or(|a| a.contains_key("profile"))
+    }
+
+    fn read(
+        &self,
+        unlocked: &[Variant],
+        locked: &[Variant],
+    ) -> Result<Option<Vec<u8>>, KeyringError> {
         let item = match (unlocked.first(), locked.first()) {
             (Some(item), _) => item.clone(),
             (None, Some(item)) => {
@@ -138,6 +213,23 @@ impl Keyring {
 
     /// Stores (replaces) the session.
     pub fn store(&self, secret: &[u8]) -> Result<(), KeyringError> {
+        self.store_with(attributes(self.kind, &self.profile), secret)
+    }
+
+    /// Stores an item the way the first keyring release did (no profile).
+    /// For the takeover test only.
+    #[doc(hidden)]
+    pub fn store_without_profile_for_tests(&self, secret: &[u8]) -> Result<(), KeyringError> {
+        let mut legacy = attributes(self.kind, "");
+        legacy.remove("profile");
+        self.store_with(legacy, secret)
+    }
+
+    fn store_with(
+        &self,
+        item_attributes: HashMap<String, String>,
+        secret: &[u8],
+    ) -> Result<(), KeyringError> {
         let collection = call(
             &self.bus,
             PATH,
@@ -159,7 +251,7 @@ impl Keyring {
             ),
             (
                 "org.freedesktop.Secret.Item.Attributes".to_string(),
-                attributes(self.kind).to_variant(),
+                item_attributes.to_variant(),
             ),
         ]);
         let secret = Variant::tuple_from_iter([
@@ -257,7 +349,7 @@ impl SessionStore {
     /// The store with the keyring item of `kind` (tests use their own).
     pub fn with_kind(paths: &ikeloud_config::Paths, kind: &'static str) -> Self {
         Self {
-            keyring: Keyring::open_kind(kind).ok(),
+            keyring: Keyring::open_kind(kind, &paths.session.to_string_lossy()).ok(),
             file: paths.session.clone(),
             last: std::cell::RefCell::new(None),
         }
