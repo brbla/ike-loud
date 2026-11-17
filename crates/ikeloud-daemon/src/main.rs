@@ -28,8 +28,8 @@ use ikeloud_daemon::{
 use ikeloud_i18n::{Translations, languages_from_env};
 use ikeloud_local::{LocalDisk, trash_date};
 use ikeloud_safety::{
-    ApprovedAction, ChangeKind, DEFAULT_SETTLE_TIME, MassChangeSummary, Mode, ReadOnlyReason,
-    Rejection, RelPath,
+    Action, ApprovedAction, ChangeKind, DEFAULT_SETTLE_TIME, MassChangeSummary, Mode,
+    ReadOnlyReason, Rejection, RelPath,
 };
 use ikeloud_state::StateDb;
 use ikeloud_sync::StopReason;
@@ -119,6 +119,7 @@ fn main() -> ExitCode {
         }),
     );
     let counts = Cell::new((0u64, 0u64));
+    let uploaded = Cell::new(0u64);
     // Local changes the last run deferred (read-only: never uploaded).
     let pending = Cell::new(0u64);
     let mut remote = Reporting {
@@ -126,6 +127,8 @@ fn main() -> ExitCode {
         status: &paths.status,
         counts: &counts,
         pending: &pending,
+        uploaded: &uploaded,
+        mode: &mode,
     };
     let mut daemon = Daemon::new(setup, db, watches, Timing::DEFAULT);
     let status_path = paths.status.clone();
@@ -181,6 +184,7 @@ fn main() -> ExitCode {
         let (files, downloaded) = counts.get();
         let mut file = FileStatus::now(state, detail, files, downloaded);
         file.local_pending = pending.get();
+        file.uploaded = uploaded.get();
         file.writes = mode.get() == Mode::Full;
         let _ = file.save(&status_path);
     };
@@ -337,6 +341,10 @@ struct Reporting<'a, R: Remote> {
     counts: &'a Cell<(u64, u64)>,
     /// Local changes not uploaded, from the last run.
     pending: &'a Cell<u64>,
+    /// Files uploaded since start.
+    uploaded: &'a Cell<u64>,
+    /// The sync mode (for the "two-way" flag while a run is going on).
+    mode: &'a Cell<Mode>,
 }
 
 impl<R: Remote> Reporting<'_, R> {
@@ -344,6 +352,8 @@ impl<R: Remote> Reporting<'_, R> {
         let (files, downloaded) = self.counts.get();
         let mut file = FileStatus::now(State::Syncing, detail, files, downloaded);
         file.local_pending = self.pending.get();
+        file.uploaded = self.uploaded.get();
+        file.writes = self.mode.get() == Mode::Full;
         let _ = file.save(self.status);
     }
 }
@@ -373,6 +383,16 @@ impl<R: Remote> Remote for Reporting<'_, R> {
         action: ApprovedAction,
         content: Option<&mut dyn std::io::Read>,
     ) -> Result<Option<Written>, RemoteError> {
-        self.inner.write(action, content)
+        let path = match action.action() {
+            Action::Upload { remote, .. } => Some(remote.clone()),
+            Action::UploadConflictCopy { path, .. } => Some(path.clone()),
+            _ => None,
+        };
+        let written = self.inner.write(action, content)?;
+        if let Some(path) = path {
+            self.uploaded.set(self.uploaded.get().saturating_add(1));
+            self.save(path.as_str());
+        }
+        Ok(written)
     }
 }

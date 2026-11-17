@@ -188,6 +188,8 @@ pub struct Status {
     pub local_pending: u64,
     /// The daemon uploads (two-way sync); `false`: it only reads.
     pub writes: bool,
+    /// Files uploaded since the daemon started.
+    pub uploaded: u64,
     /// Seconds since 1970 of the last write of the status.
     pub updated: u64,
     /// Process id of the daemon that wrote it.
@@ -209,6 +211,7 @@ impl Status {
             downloaded,
             local_pending: 0,
             writes: false,
+            uploaded: 0,
             updated: unix_now(),
             pid: std::process::id(),
         }
@@ -217,13 +220,14 @@ impl Status {
     /// Writes the status file.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         let text = format!(
-            "state={}\ndetail={}\nremote_files={}\ndownloaded={}\nlocal_pending={}\nwrites={}\nupdated={}\npid={}\n",
+            "state={}\ndetail={}\nremote_files={}\ndownloaded={}\nlocal_pending={}\nwrites={}\nuploaded={}\nupdated={}\npid={}\n",
             self.state.name(),
             self.detail.replace(['\n', '\r'], " "),
             self.remote_files,
             self.downloaded,
             self.local_pending,
             u8::from(self.writes),
+            self.uploaded,
             self.updated,
             self.pid
         );
@@ -245,6 +249,7 @@ impl Status {
             downloaded: number("downloaded"),
             local_pending: number("local_pending"),
             writes: number("writes") == 1,
+            uploaded: number("uploaded"),
             updated: number("updated"),
             pid: map.get("pid").and_then(|v| v.parse().ok()).unwrap_or(0),
         })
@@ -564,6 +569,7 @@ mod tests {
         let mut status = Status::now(State::Syncing, "two\nlines", 12, 3);
         status.local_pending = 4;
         status.writes = true;
+        status.uploaded = 9;
         status.save(&path).unwrap();
         let read = Status::load(&path).unwrap();
         assert_eq!(read, status);
