@@ -80,6 +80,24 @@ fn main() -> ExitCode {
     }
     store.save(&client.saved().to_json());
 
+    // Diagnostics: the listing from CloudKit against the folder walk.
+    if std::env::args().any(|a| a == "--compare-listing") {
+        let mut remote = ICloudRemote::new(client, Box::new(|_: &SavedSession| {}));
+        #[allow(clippy::print_stdout)]
+        return match remote.compare_listings() {
+            Ok(lines) => {
+                for line in lines {
+                    println!("{line}");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(reason) => {
+                println!("stopped: {reason:?}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     if let Err(e) = std::fs::create_dir_all(&folder) {
         report(State::Error, &format!("cannot create the folder: {e}"));
         return ExitCode::FAILURE;

@@ -16,6 +16,7 @@ mod icloud;
 mod remote;
 mod run;
 mod schedule;
+mod tree;
 
 pub use daemon::{Daemon, Event, Status, spawn_watcher};
 pub use icloud::{ICloudRemote, stop_reason};

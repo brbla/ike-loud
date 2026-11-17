@@ -158,6 +158,10 @@ pub struct Account {
     pub drivews: String,
     /// Base URL of the document service (downloads).
     pub docws: String,
+    /// Base URL of the CloudKit database service (changes of the Drive
+    /// zone, decision 0025); `None` in sessions saved before it was used.
+    #[serde(default)]
+    pub ckdatabasews: Option<String>,
 }
 
 /// State of a sign-in in progress (between the password and the code).
@@ -721,6 +725,7 @@ fn account_from(value: &Value, call: &'static str) -> Result<Account, ApiError> 
             dsid,
             drivews,
             docws,
+            ckdatabasews: service("ckdatabasews"),
         }),
         _ => Err(ApiError::DriveUnavailable),
     }

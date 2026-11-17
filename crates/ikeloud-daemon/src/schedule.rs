@@ -44,7 +44,9 @@ impl Timing {
         quiet: Duration::from_secs(5),
         max_delay: Duration::from_secs(30),
         min_gap: Duration::from_secs(10),
-        poll: Duration::from_secs(5 * 60),
+        // A minute: with CloudKit's changes an unchanged iCloud costs one
+        // request (decision 0025); before, every poll walked all folders.
+        poll: Duration::from_secs(60),
         retry: Duration::from_secs(30),
         retry_max: Duration::from_secs(30 * 60),
         follow_ups: 3,
@@ -200,7 +202,12 @@ fn backoff(t: Timing, failures: u32) -> Duration {
 mod tests {
     use super::*;
 
-    const T: Timing = Timing::DEFAULT;
+    // A poll interval longer than the scenarios below, so they test the
+    // local-change rules alone.
+    const T: Timing = Timing {
+        poll: Duration::from_secs(300),
+        ..Timing::DEFAULT
+    };
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
@@ -315,6 +322,6 @@ mod tests {
         };
         assert_eq!(backoff(t, u32::MAX), t.retry_max);
         assert_eq!(backoff(T, 0), T.retry);
-        assert_eq!(Timing::default(), T);
+        assert_eq!(Timing::default(), Timing::DEFAULT);
     }
 }
