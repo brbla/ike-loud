@@ -11,6 +11,11 @@ RestartSec=30
 # 2: not set up yet, 3: signed out. Both wait for the app (setup, sign-in),
 # which starts the service again; restarting would only repeat the exit.
 RestartPreventExitStatus=2 3
+# A stop lets the daemon finish the transfers under way and record them
+# (an upload done on iCloud but not recorded comes back as a conflict copy);
+# SIGTERM only after a minute.
+ExecStop=%h/.local/bin/ikeloud-daemon --stop $MAINPID
+TimeoutStopSec=90
 # No core dumps: after a crash, nothing from the sign-in (SRP secrets,
 # session tokens) may end up on disk (docs/rozhodnuti/0013, 0016). The
 # daemon cannot do this itself: prctl/setrlimit need unsafe code, which the

@@ -1250,7 +1250,9 @@ impl App {
     ) {
         let status = Status::load(&self.paths.status);
         let was_paused = self.paused.get();
-        self.daemon.borrow_mut().stop(status.as_ref());
+        self.daemon
+            .borrow_mut()
+            .stop(status.as_ref(), &self.paths.request);
         let resume = |this: &Rc<Self>| {
             if !was_paused {
                 this.start_daemon();
@@ -1492,7 +1494,9 @@ impl App {
         .save(&self.paths.settings);
         if pause {
             let status = Status::load(&self.paths.status);
-            self.daemon.borrow_mut().stop(status.as_ref());
+            self.daemon
+                .borrow_mut()
+                .stop(status.as_ref(), &self.paths.request);
             self.paused.set(true);
         } else {
             self.start_daemon();
@@ -1502,7 +1506,9 @@ impl App {
 
     fn sign_out(self: &Rc<Self>) {
         let status = Status::load(&self.paths.status);
-        self.daemon.borrow_mut().stop(status.as_ref());
+        self.daemon
+            .borrow_mut()
+            .stop(status.as_ref(), &self.paths.request);
         self.sessions.delete();
         let _ = std::fs::remove_file(&self.paths.status);
         if let Ok(mut guard) = self.client.lock() {

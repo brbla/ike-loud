@@ -350,6 +350,9 @@ pub enum Request {
     Confirm(String),
     /// Run now.
     SyncNow,
+    /// Finish the actions under way, record them and exit (a stop of the
+    /// service): nothing done on iCloud stays unrecorded.
+    Stop,
 }
 
 impl Request {
@@ -358,6 +361,7 @@ impl Request {
         let text = match self {
             Self::Confirm(id) => format!("confirm={}\n", id.replace(['\n', '\r'], "")),
             Self::SyncNow => "sync-now\n".to_string(),
+            Self::Stop => "stop\n".to_string(),
         };
         write_private(path, text.as_bytes())
     }
@@ -370,6 +374,7 @@ impl Request {
         match line.split_once('=') {
             Some(("confirm", id)) if !id.is_empty() => Some(Self::Confirm(id.to_string())),
             _ if line == "sync-now" => Some(Self::SyncNow),
+            _ if line == "stop" => Some(Self::Stop),
             _ => None,
         }
     }
@@ -672,6 +677,8 @@ mod tests {
         assert_eq!(Request::take(&request), None, "taken once");
         Request::SyncNow.save(&request).unwrap();
         assert_eq!(Request::take(&request), Some(Request::SyncNow));
+        Request::Stop.save(&request).unwrap();
+        assert_eq!(Request::take(&request), Some(Request::Stop));
         fs::write(&request, "confirm=\n").unwrap();
         assert_eq!(Request::take(&request), None);
         fs::remove_dir_all(dir).unwrap();

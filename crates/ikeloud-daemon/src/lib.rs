@@ -18,6 +18,21 @@ mod run;
 mod schedule;
 mod tree;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+/// Asks the daemon to stop: the actions under way finish and are recorded,
+/// no new one starts, the run ends.
+pub fn request_shutdown() {
+    SHUTDOWN.store(true, Ordering::SeqCst);
+}
+
+/// Whether a stop was asked for.
+pub fn shutting_down() -> bool {
+    SHUTDOWN.load(Ordering::SeqCst)
+}
+
 pub use daemon::{Daemon, Event, Status, spawn_watcher};
 pub use icloud::{ICloudRemote, stop_reason};
 pub use remote::{Download, Listing, Remote, RemoteError, Written};

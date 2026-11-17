@@ -40,6 +40,20 @@ fn main() -> ExitCode {
         Ok(p) => p,
         Err(_) => return ExitCode::from(2),
     };
+    // `ikeloud-daemon --stop <pid>` (the service's ExecStop): asks the
+    // running daemon to finish what it is doing and waits for it.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--stop") {
+        let _ = Request::Stop.save(&paths.request);
+        let pid = args.get(2).cloned().unwrap_or_default();
+        for _ in 0..240 {
+            if pid.is_empty() || !Path::new(&format!("/proc/{pid}")).exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        return ExitCode::SUCCESS;
+    }
     let report = |state: State, detail: &str| {
         let _ = FileStatus::now(state, detail, 0, 0).save(&paths.status);
     };
@@ -230,6 +244,11 @@ fn spawn_requests(
                 std::thread::sleep(std::time::Duration::from_secs(1));
                 let event = match Request::take(&path) {
                     Some(Request::SyncNow) => Event::SyncNow,
+                    Some(Request::Stop) => {
+                        // Actions under way finish; the loop ends after the run.
+                        ikeloud_daemon::request_shutdown();
+                        Event::Stop
+                    }
                     Some(Request::Confirm(id)) => {
                         let confirmed = waiting.lock().ok().and_then(|w| {
                             w.as_ref()
