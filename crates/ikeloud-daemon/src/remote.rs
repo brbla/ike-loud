@@ -47,14 +47,12 @@ pub enum RemoteError {
     Stop(StopReason),
     /// An upload's content reached iCloud but the document got no answer
     /// (it may be there); `checksum` is iCloud's checksum of the content.
-    /// Stops the run like [`RemoteError::Stop`].
+    /// Only this file waits for the next listing; the run goes on.
     Unconfirmed {
         /// The document written.
         doc_id: DocId,
         /// iCloud's checksum of the uploaded content.
         checksum: String,
-        /// Why the run stops.
-        reason: StopReason,
     },
 }
 
