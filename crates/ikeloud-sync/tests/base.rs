@@ -70,6 +70,30 @@ fn next_common_state() {
             ],
         },
         Case {
+            // Daemon simulation, seed 611: a crash after both transfers;
+            // meanwhile the user swapped the two local files and moved the
+            // copy on iCloud. Both want "a"; the moved one takes its old
+            // path (both moved: iCloud wins), nobody is dropped.
+            name: "two proven files wanting one name: the second path, not a lost entry",
+            old: vec![base("a", Some(1), "d1", "h1", "e1")],
+            local: vec![local("a", 2, "h5"), local("c", 3, "h4")],
+            remote: vec![remote("a", "d1", "e3"), remote("d/e", "d4", "e4")],
+            transfers: vec![
+                transfer("c (copy)", "d4", "e4", 2, "h5"),
+                transfer("a", "d1", "e3", 3, "h4"),
+            ],
+            expected: vec![
+                BaseEntry {
+                    local_path: ikeloud_testkit::p("c"),
+                    ..base("a", Some(3), "d1", "h4", "e3")
+                },
+                BaseEntry {
+                    local_path: ikeloud_testkit::p("a"),
+                    ..base("c (copy)", Some(2), "d4", "h5", "e4")
+                },
+            ],
+        },
+        Case {
             name: "transfer while moved only locally: the old path (the server file holds it)",
             old: vec![base("a", Some(1), "d1", "h1", "e1")],
             local: vec![local("mine", 1, "h2")],
