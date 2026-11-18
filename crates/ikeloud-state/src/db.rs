@@ -1,5 +1,6 @@
 //! SQLite storage. The only module that touches `rusqlite`.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use ikeloud_safety::{ContentHash, Etag, LocalId, RelPath};
@@ -10,10 +11,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::{BaseChange, JournalEntry, JournalKind, StateError, UnconfirmedUpload};
 
 /// Schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// Migrations: `MIGRATIONS[v]` brings version `v` to `v + 1`.
-const MIGRATIONS: [&str; 4] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
+const MIGRATIONS: [&str; 5] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5];
 
 const SCHEMA_V1: &str = "
 CREATE TABLE base (
@@ -83,6 +84,22 @@ CREATE TABLE base_folders (
 ) STRICT;
 CREATE TABLE folder_sync (
     id INTEGER PRIMARY KEY CHECK (id = 1)
+) STRICT;
+-- A new database (nothing synced, nothing in the journal) knows folders
+-- from the start.
+INSERT INTO folder_sync (id)
+    SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM base) AND NOT EXISTS (SELECT 1 FROM journal);
+";
+
+/// Version 5: iCloud's content checksum of each synced document at the
+/// version the common state knows. A new version with the same checksum
+/// is the same content (a rename or move on iCloud changes the version):
+/// nothing needs downloading (decision 0025, step 3).
+const SCHEMA_V5: &str = "
+CREATE TABLE remote_checksums (
+    doc_id   TEXT PRIMARY KEY NOT NULL CHECK (doc_id <> ''),
+    etag     TEXT NOT NULL CHECK (etag <> ''),
+    checksum TEXT NOT NULL CHECK (checksum <> '')
 ) STRICT;
 ";
 
@@ -319,6 +336,15 @@ impl StateDb {
         Ok(Some(out))
     }
 
+    /// Forgets that folders were recorded, as in a database from before
+    /// folder sync (tests of the upgrade).
+    #[doc(hidden)]
+    pub fn forget_folders_for_tests(&mut self) -> Result<(), StateError> {
+        self.conn
+            .execute_batch("DELETE FROM base_folders; DELETE FROM folder_sync;")
+            .map_err(sql)
+    }
+
     /// Replaces the folders of the common state, in one transaction.
     pub fn set_base_folders(&mut self, folders: &[RelPath]) -> Result<(), StateError> {
         let tx = self.conn.transaction().map_err(sql)?;
@@ -332,6 +358,64 @@ impl StateDb {
         }
         tx.execute("INSERT OR IGNORE INTO folder_sync (id) VALUES (1)", [])
             .map_err(sql)?;
+        tx.commit().map_err(sql)
+    }
+
+    /// iCloud's content checksums of synced documents: doc → (version,
+    /// checksum at that version).
+    pub fn remote_checksums(&self) -> Result<BTreeMap<DocId, (Etag, String)>, StateError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT doc_id, etag, checksum FROM remote_checksums")
+            .map_err(sql)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(sql)?;
+        let mut out = BTreeMap::new();
+        for row in rows {
+            let (doc, etag, checksum) = row.map_err(sql)?;
+            out.insert(DocId::new(doc), (Etag::new(etag), checksum));
+        }
+        Ok(out)
+    }
+
+    /// Remembers iCloud's checksum of `doc` at `etag` (after an upload).
+    pub fn put_remote_checksum(
+        &mut self,
+        doc: &DocId,
+        etag: &Etag,
+        checksum: &str,
+    ) -> Result<(), StateError> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO remote_checksums (doc_id, etag, checksum) VALUES (?1, ?2, ?3)",
+                params![doc.as_str(), etag.as_str(), checksum],
+            )
+            .map_err(sql)?;
+        Ok(())
+    }
+
+    /// Replaces the stored checksums, in one transaction.
+    pub fn set_remote_checksums(
+        &mut self,
+        checksums: &BTreeMap<DocId, (Etag, String)>,
+    ) -> Result<(), StateError> {
+        let tx = self.conn.transaction().map_err(sql)?;
+        tx.execute("DELETE FROM remote_checksums", [])
+            .map_err(sql)?;
+        for (doc, (etag, checksum)) in checksums {
+            tx.execute(
+                "INSERT INTO remote_checksums (doc_id, etag, checksum) VALUES (?1, ?2, ?3)",
+                params![doc.as_str(), etag.as_str(), checksum],
+            )
+            .map_err(sql)?;
+        }
         tx.commit().map_err(sql)
     }
 
@@ -687,6 +771,12 @@ mod tests {
             vec![],
             "the new table exists"
         );
+        assert_eq!(
+            db.base_folders().expect("folders"),
+            None,
+            "a database with data from before records folders first"
+        );
+        assert!(db.remote_checksums().expect("checksums").is_empty());
         let v: i64 = db
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))

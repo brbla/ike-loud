@@ -223,6 +223,7 @@ impl<T: Transport> Core<T> {
         Ok(Some(Written {
             doc_id: DocId::new(uploaded.docwsid),
             etag: Etag::new(uploaded.etag),
+            checksum: uploaded.checksum,
         }))
     }
 

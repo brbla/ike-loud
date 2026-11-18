@@ -5,13 +5,13 @@ use std::time::{Duration, SystemTime};
 
 use ikeloud_local::{HashCache, LocalDisk, ScanError, Skipped, scan_with};
 use ikeloud_safety::{
-    Action, BRAKE_WINDOW, Context, Decision, DeferredAction, LocalFolderState,
+    Action, BRAKE_WINDOW, Context, Decision, DeferredAction, Etag, LocalFolderState,
     MassChangeConfirmation, Mode, RecentChanges, Rejection, RelPath, assess,
 };
 use ikeloud_state::{BaseChange, JournalEntry, JournalKind, StateDb, StateError};
 use ikeloud_sync::names::key;
 use ikeloud_sync::{
-    BaseEntry, Collision, FolderStates, RemoteFile, Report, States, StopReason, Transfer,
+    BaseEntry, Collision, DocId, FolderStates, RemoteFile, Report, States, StopReason, Transfer,
     build_plan, execute, next_base, next_base_folders, plan_folders,
 };
 
@@ -170,6 +170,77 @@ fn settle_unconfirmed(
     Ok(())
 }
 
+/// Whether `r`, listed under another version than `known`, has the same
+/// content iCloud had at `known` (its checksum): a rename or move on
+/// iCloud gives a document a new version (seen live), the content stays
+/// (decision 0025 step 3).
+fn same_content(
+    known: &Etag,
+    r: &RemoteFile,
+    checksums: &BTreeMap<RelPath, String>,
+    stored: &BTreeMap<DocId, (Etag, String)>,
+) -> bool {
+    r.etag != *known
+        && stored
+            .get(&r.doc_id)
+            .is_some_and(|(etag, sum)| etag == known && checksums.get(&r.path) == Some(sum))
+}
+
+/// Common-state entries whose document is listed under a new version with
+/// the same content, with that version.
+fn same_content_new_versions(
+    base: &[BaseEntry],
+    remote: &[RemoteFile],
+    checksums: &BTreeMap<RelPath, String>,
+    stored: &BTreeMap<DocId, (Etag, String)>,
+) -> Vec<BaseEntry> {
+    let by_doc: BTreeMap<&DocId, &RemoteFile> = remote.iter().map(|f| (&f.doc_id, f)).collect();
+    base.iter()
+        .filter_map(|b| {
+            let r = by_doc.get(&b.doc_id)?;
+            same_content(&b.etag, r, checksums, stored).then(|| BaseEntry {
+                etag: r.etag.clone(),
+                ..b.clone()
+            })
+        })
+        .collect()
+}
+
+/// Transfers whose document is listed under a new version with the same
+/// content take that version: what the transfer proved still holds (a
+/// file moved on iCloud right after its upload is not new on both sides).
+fn refresh_transfers(
+    transfers: &mut [Transfer],
+    remote: &[RemoteFile],
+    checksums: &BTreeMap<RelPath, String>,
+    stored: &BTreeMap<DocId, (Etag, String)>,
+) {
+    let by_doc: BTreeMap<&DocId, &RemoteFile> = remote.iter().map(|f| (&f.doc_id, f)).collect();
+    for t in transfers {
+        if let Some(r) = by_doc.get(&t.doc_id)
+            && same_content(&t.etag, r, checksums, stored)
+        {
+            t.etag = r.etag.clone();
+        }
+    }
+}
+
+/// The checksum of every listed document at its listed version.
+fn listed_checksums(
+    remote: &[RemoteFile],
+    checksums: &BTreeMap<RelPath, String>,
+) -> BTreeMap<DocId, (Etag, String)> {
+    remote
+        .iter()
+        .filter_map(|f| {
+            Some((
+                f.doc_id.clone(),
+                (f.etag.clone(), checksums.get(&f.path)?.clone()),
+            ))
+        })
+        .collect()
+}
+
 /// The first part of a run, see [`Started`].
 pub fn start_run(
     setup: &SyncSetup<'_>,
@@ -194,6 +265,7 @@ pub fn start_run(
         Err(reason) => return Ok(Started::Ended(RunOutcome::RemoteUnavailable(reason))),
     };
     settle_unconfirmed(db, &listing, now)?;
+    let remote_checksums = listing.checksums.clone();
     let base_folders = db.base_folders()?;
     let folder_states = FolderStates {
         local: local.folders,
@@ -209,17 +281,38 @@ pub fn start_run(
     // Transfers recorded by a run that crashed before storing its common
     // state: they go into the common state first, or the plan would take
     // the files they synced for new files on both sides.
-    let pending = db.pending()?;
+    let stored = db.remote_checksums()?;
+    let mut pending = db.pending()?;
+    refresh_transfers(&mut pending, &states.remote, &remote_checksums, &stored);
     if !pending.is_empty() {
         let recovered = next_base(&states.base, &states, &pending);
         db.commit(&changes(&states.base, &recovered), &[])?;
         states.base = recovered;
     }
+    // A new version with the content the common state knows (a rename or
+    // move on iCloud changes the version, decision 0025 step 3): the common
+    // state takes the new version, so nothing is downloaded again.
+    let same = same_content_new_versions(&states.base, &states.remote, &remote_checksums, &stored);
+    if !same.is_empty() {
+        let changes: Vec<BaseChange> = same.iter().cloned().map(BaseChange::Set).collect();
+        db.commit(&changes, &[])?;
+        for entry in same {
+            if let Some(b) = states.base.iter_mut().find(|b| b.doc_id == entry.doc_id) {
+                *b = entry;
+            }
+        }
+    }
+    // What iCloud says each document's content is now: known for the next
+    // listing (and for this run's own downloads). Not from a listing
+    // without checksums (the folders walked).
+    if !remote_checksums.is_empty() {
+        db.set_remote_checksums(&listed_checksums(&states.remote, &remote_checksums))?;
+    }
     let mut plan = build_plan(&states, settle_time, setup.conflict_name);
     // Folders (decision 0027); in a database from before, not until they
     // were recorded once: a folder on one side may be one deleted on the
-    // other. A new sync (no common state yet) has nothing to protect.
-    if base_folders.is_some() || states.base.is_empty() {
+    // other. (A new database knows folders from the start.)
+    if base_folders.is_some() {
         let folders = plan_folders(&folder_states, &states, &plan.actions);
         plan.actions.splice(0..0, folders.create);
         plan.actions.extend(folders.remove);
@@ -255,6 +348,7 @@ pub fn start_run(
         now,
         record_failed: false,
         unconfirmed: std::sync::Mutex::new(Vec::new()),
+        checksums: std::sync::Mutex::new(Vec::new()),
     };
     let executed = execute(approved, &mut effects);
     // The brake window starts again after what the user confirmed, and only
@@ -308,6 +402,7 @@ impl ExecutedRun {
         // iCloud, which is handled like any other.
         let listed = remote.list().ok();
         let after_folders = listed.as_ref().map(|r| r.folders.clone());
+        let after_checksums = listed.as_ref().map(|r| r.checksums.clone());
         let after_remote = listed
             .map(|r| r.files)
             .unwrap_or_else(|| predicted_remote(&self.remote_before, &self.executed));
@@ -325,9 +420,18 @@ impl ExecutedRun {
                     remote_folders: vec![],
                     base: vec![],
                 };
-                let transfers = db.pending()?;
+                let mut transfers = db.pending()?;
+                if let Some(checksums) = &after_checksums {
+                    let stored = db.remote_checksums()?;
+                    refresh_transfers(&mut transfers, &after.remote, checksums, &stored);
+                }
                 let new_base = next_base(&self.base, &after, &transfers);
                 db.commit(&changes(&self.base, &new_base), &[])?;
+                // What iCloud says each document's content is now (from a
+                // fresh listing with checksums only).
+                if let Some(checksums) = after_checksums.as_ref().filter(|c| !c.is_empty()) {
+                    db.set_remote_checksums(&listed_checksums(&after.remote, checksums))?;
+                }
                 true
             }
             // The folder cannot be read again: the old common state stays

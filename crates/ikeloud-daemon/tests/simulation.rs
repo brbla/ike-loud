@@ -253,6 +253,9 @@ impl User {
                     icloud.put(&name, b"");
                     let doc_slot = icloud.files.get_mut(&name).expect("put");
                     *doc_slot = f; // same document, new path
+                    // iCloud gives a moved file a new version (seen live);
+                    // its content checksum stays.
+                    doc_slot.etag += 1_000_000;
                 }
             }
         }
@@ -363,6 +366,11 @@ struct World {
     icloud: FakeICloud,
     user: User,
     stats: Stats,
+    /// An account whose listings never carry checksums (CloudKit unusable,
+    /// the folders walked): a move on iCloud gives a document a new version
+    /// and nothing tells it is the same content, so sync may make needless
+    /// copies there (never lose content).
+    walk_only: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -385,7 +393,7 @@ impl World {
             fs::create_dir_all(dir.join(sub)).expect("folders");
         }
         let db = StateDb::open(&dir.join("state.db")).expect("db");
-        Self {
+        let mut world = Self {
             user: User {
                 rng: Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1),
                 root: dir.join("root"),
@@ -404,7 +412,10 @@ impl World {
             hashes: HashCache::default(),
             icloud: FakeICloud::default(),
             stats: Stats::default(),
-        }
+            walk_only: seed % 8 == 7,
+        };
+        world.icloud.no_checksums = world.walk_only;
+        world
     }
 
     /// Contents in a trash or the local history (Recently Deleted counts
@@ -454,16 +465,10 @@ impl World {
             self.icloud.offline_after = Some(self.user.rng.below(3));
             self.stats.outages += 1;
         }
-        // Listings without checksums now and then (the folders walked
-        // instead of CloudKit), and uploads that land on iCloud but whose
-        // answer is lost (decision 0026). Not both: a lost answer seen by a
-        // listing without checksums ends in a conflict copy of identical
-        // content (safe, nothing lost, see the sync test
-        // without_checksums_a_lost_answer_still_ends_safely_in_a_conflict_copy),
-        // which the duplicate check below rightly counts as a needless copy.
-        let unconfirmed = !self.db.unconfirmed().expect("state db").is_empty();
-        self.icloud.no_checksums = faults && !unconfirmed && self.user.rng.below(8) == 0;
-        if faults && !self.icloud.no_checksums && self.user.rng.below(5) == 0 {
+        // Uploads that land on iCloud but whose answer is lost (decision
+        // 0026). Without checksums (walk_only) that ends in a conflict copy
+        // of identical content: safe, nothing lost.
+        if faults && self.user.rng.below(5) == 0 {
             self.icloud.lose_upload_answer = true;
             self.stats.lost_answers += 1;
         }
@@ -533,7 +538,6 @@ impl World {
         }
         self.icloud.offline_after = None;
         self.icloud.lose_upload_answer = false;
-        self.icloud.no_checksums = false;
         done
     }
 
@@ -589,7 +593,12 @@ impl World {
         // Every content is created once by the user and only copied to the
         // other side by sync: the same content twice on one side is a copy
         // sync made for nothing (e.g. a conflict copy of an unchanged file).
-        for (side, files) in [("local", &local), ("iCloud", &remote)] {
+        let sides: &[(&str, &BTreeMap<String, Vec<u8>>)] = if self.walk_only {
+            &[]
+        } else {
+            &[("local", &local), ("iCloud", &remote)]
+        };
+        for &(side, files) in sides {
             let mut seen = BTreeSet::new();
             for (path, content) in files.iter() {
                 if !seen.insert(content) {

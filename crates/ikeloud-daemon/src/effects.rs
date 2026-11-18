@@ -8,9 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ikeloud_hash::HashingReader;
 use ikeloud_local::{DiskError, LocalDisk};
-use ikeloud_safety::{Action, ApprovedAction, ContentHash, LocalId, RelPath};
+use ikeloud_safety::{Action, ApprovedAction, ContentHash, Etag, LocalId, RelPath};
 use ikeloud_state::{JournalEntry, JournalKind, StateDb, UnconfirmedUpload};
-use ikeloud_sync::{ApplyResult, EffectError, Effects, StopReason, Transfer};
+use ikeloud_sync::{ApplyResult, DocId, EffectError, Effects, StopReason, Transfer};
 
 use crate::remote::{Remote, RemoteError};
 
@@ -24,6 +24,8 @@ pub(crate) struct RunEffects<'a> {
     pub(crate) record_failed: bool,
     /// Uploads without an answer, from any thread, to be stored.
     pub(crate) unconfirmed: Mutex<Vec<UnconfirmedUpload>>,
+    /// iCloud's checksums of uploaded versions, from any thread.
+    pub(crate) checksums: Mutex<Vec<(DocId, Etag, String)>>,
 }
 
 impl From<RemoteError> for EffectError {
@@ -52,6 +54,7 @@ struct Ctx<'a> {
     remote: &'a mut dyn Remote,
     now: SystemTime,
     unconfirmed: &'a Mutex<Vec<UnconfirmedUpload>>,
+    checksums: &'a Mutex<Vec<(DocId, Etag, String)>>,
 }
 
 /// Uploads the local file `path` (still `id`) with an approved action.
@@ -105,6 +108,9 @@ fn upload(
         other => other?,
     }
     .ok_or(EffectError::Stop(StopReason::UnknownResponse))?;
+    if let (Some(sum), Ok(mut list)) = (&written.checksum, ctx.checksums.lock()) {
+        list.push((written.doc_id.clone(), written.etag.clone(), sum.clone()));
+    }
     Ok(Some(Transfer {
         path: remote_path,
         doc_id: written.doc_id,
@@ -196,6 +202,7 @@ impl Effects for RunEffects<'_> {
             remote: &mut *self.remote,
             now: self.now,
             unconfirmed: &self.unconfirmed,
+            checksums: &self.checksums,
         };
         let result = perform(&mut ctx, approved);
         self.store_unconfirmed();
@@ -242,7 +249,8 @@ impl Effects for RunEffects<'_> {
             Mutex::new(actions.into_iter().enumerate().collect());
         let stop = AtomicBool::new(false);
         let mut results: Vec<Option<ApplyResult>> = (0..count).map(|_| None).collect();
-        let (disk, now, unconfirmed) = (self.disk, self.now, &self.unconfirmed);
+        let (disk, now, unconfirmed, checksums) =
+            (self.disk, self.now, &self.unconfirmed, &self.checksums);
         let (sender, receiver) = mpsc::channel();
         std::thread::scope(|scope| {
             for mut fork in forks {
@@ -253,6 +261,7 @@ impl Effects for RunEffects<'_> {
                         remote: &mut *fork,
                         now,
                         unconfirmed,
+                        checksums,
                     };
                     while !stop.load(Ordering::SeqCst) && !crate::shutting_down() {
                         let next = queue.lock().ok().and_then(|mut q| q.pop_front());
@@ -304,6 +313,16 @@ impl RunEffects<'_> {
             if self.db.add_unconfirmed(&upload).is_err() {
                 self.record_failed = true;
             }
+        }
+        let sums = self
+            .checksums
+            .get_mut()
+            .map(std::mem::take)
+            .unwrap_or_default();
+        for (doc, etag, sum) in sums {
+            // Only an aid (a later rename is then not downloaded): a failure
+            // to store it changes nothing that must be known.
+            let _ = self.db.put_remote_checksum(&doc, &etag, &sum);
         }
     }
 }

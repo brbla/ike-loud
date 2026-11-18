@@ -566,7 +566,8 @@ fn upload_new_never_replaces() {
         result.unwrap(),
         Uploaded {
             docwsid: "NEWDOC".to_string(),
-            etag: "k::j".to_string()
+            etag: "k::j".to_string(),
+            checksum: Some("fc".to_string()),
         }
     );
     let sent = fake.sent();

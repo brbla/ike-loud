@@ -519,6 +519,7 @@ fn a_database_from_before_folders_only_records_them_first() {
     };
     f.db.commit(&[ikeloud_state::BaseChange::Set(entry)], &[])
         .expect("commit");
+    f.db.forget_folders_for_tests().expect("as before v4");
     fs::create_dir_all(f.root().join("left-behind")).expect("mkdir");
     f.icloud.folders.insert("deleted-here".into());
     f.icloud.folders.insert("both".into());
@@ -537,4 +538,70 @@ fn a_database_from_before_folders_only_records_them_first() {
         Some(1),
         "only both"
     );
+}
+
+/// Renames a file on the fake iCloud as iCloud does: a new version.
+fn rename_on_icloud(f: &mut Fixture, from: &str, to: &str) {
+    let mut file = f.icloud.files.remove(from).expect("exists");
+    file.etag += 1000;
+    f.icloud.files.insert(to.into(), file);
+}
+
+fn journal_kinds(f: &Fixture) -> Vec<JournalKind> {
+    f.db.journal(100)
+        .expect("journal")
+        .into_iter()
+        .map(|e| e.kind)
+        .collect()
+}
+
+#[test]
+fn a_rename_on_icloud_is_not_downloaded_again() {
+    // Decision 0025 step 3: iCloud gives a renamed file a new version; its
+    // content checksum tells it is the same content.
+    let mut f = Fixture::new("rename-icloud");
+    f.write("keep.txt", b"k");
+    f.write("a.txt", b"big content");
+    f.settle();
+    let before = journal_kinds(&f).len();
+    rename_on_icloud(&mut f, "a.txt", "b.txt");
+    f.settle();
+    f.assert_in_sync();
+    let new: Vec<JournalKind> = journal_kinds(&f)
+        .into_iter()
+        .take(journal_kinds(&f).len() - before)
+        .collect();
+    assert_eq!(new, vec![JournalKind::MovedLocal], "moved, not downloaded");
+    assert!(
+        f.files("history").is_empty(),
+        "no old version kept: nothing replaced"
+    );
+}
+
+#[test]
+fn without_checksums_a_rename_on_icloud_is_downloaded_as_before() {
+    let mut f = Fixture::new("rename-icloud-walk");
+    f.write("keep.txt", b"k");
+    f.write("a.txt", b"content");
+    f.settle();
+    f.icloud.no_checksums = true;
+    rename_on_icloud(&mut f, "a.txt", "b.txt");
+    f.settle();
+    f.assert_in_sync();
+    assert!(
+        journal_kinds(&f).contains(&JournalKind::OverwrittenLocal)
+            || journal_kinds(&f).contains(&JournalKind::Downloaded)
+    );
+}
+
+#[test]
+fn a_new_version_with_other_content_is_downloaded() {
+    let mut f = Fixture::new("edit-icloud-checksum");
+    f.write("keep.txt", b"k");
+    f.write("a.txt", b"v1");
+    f.settle();
+    f.icloud.edit("a.txt", b"v2 from iphone");
+    f.settle();
+    f.assert_in_sync();
+    assert_eq!(f.read("a.txt").as_deref(), Some(&b"v2 from iphone"[..]));
 }
