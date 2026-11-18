@@ -317,9 +317,16 @@ fn conflict_copies(f: &Fixture) -> Vec<String> {
 fn an_upload_whose_answer_is_lost_is_recognized_by_its_checksum() {
     let mut f = Fixture::new("lost-new");
     f.write("a.txt", b"new on linux");
+    f.write("b.txt", b"another file");
     f.icloud.lose_upload_answer = true;
     let r = f.run();
-    assert_eq!(r.executed.stopped, Some(StopReason::Offline));
+    assert_eq!(r.executed.stopped, None, "not an outage: {r:?}");
+    assert_eq!(r.executed.skipped.len(), 1, "only this file waits");
+    assert_eq!(
+        f.icloud.content("b.txt"),
+        Some(&b"another file"[..]),
+        "the run went on"
+    );
     assert_eq!(
         f.icloud.content("a.txt"),
         Some(&b"new on linux"[..]),
@@ -335,12 +342,12 @@ fn an_upload_whose_answer_is_lost_is_recognized_by_its_checksum() {
         "no conflict copy"
     );
     assert!(f.db.unconfirmed().expect("read").is_empty(), "settled");
-    assert_eq!(f.db.base().expect("base").len(), 1);
+    assert_eq!(f.db.base().expect("base").len(), 2);
     let uploaded =
         f.db.journal(10)
             .expect("journal")
             .iter()
-            .filter(|e| e.kind == JournalKind::Uploaded)
+            .filter(|e| e.kind == JournalKind::Uploaded && e.path.as_str() == "a.txt")
             .count();
     assert_eq!(uploaded, 1, "in the journal once");
 }
@@ -408,5 +415,20 @@ fn a_file_moved_on_icloud_after_a_lost_answer_is_moved_locally() {
     f.settle();
     f.assert_in_sync();
     assert_eq!(f.files("root"), ["d/e.txt"]);
+    assert_eq!(conflict_copies(&f), Vec::<String>::new());
+}
+
+#[test]
+fn a_lost_answer_of_an_upload_that_did_not_land_is_forgotten_once_uploaded_again() {
+    let mut f = Fixture::new("lost-not-landed");
+    f.write("a.txt", b"x");
+    f.icloud.lose_upload_answer = true;
+    f.run();
+    // As if iCloud never created it.
+    f.icloud.files.clear();
+    f.settle();
+    f.assert_in_sync();
+    assert_eq!(f.icloud.content("a.txt"), Some(&b"x"[..]));
+    assert!(f.db.unconfirmed().expect("read").is_empty(), "forgotten");
     assert_eq!(conflict_copies(&f), Vec::<String>::new());
 }

@@ -211,7 +211,6 @@ impl Remote for FakeICloud {
             return Err(RemoteError::Unconfirmed {
                 doc_id: written.doc_id.clone(),
                 checksum: sum,
-                reason: StopReason::Offline,
             });
         }
         result

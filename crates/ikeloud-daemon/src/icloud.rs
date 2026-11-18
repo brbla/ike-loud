@@ -147,12 +147,14 @@ fn write_error(error: &ApiError) -> RemoteError {
         ApiError::UploadUnconfirmed {
             document_id,
             checksum,
-            cause,
-        } => RemoteError::Unconfirmed {
-            doc_id: DocId::new(document_id.clone()),
-            checksum: checksum.clone(),
-            reason: stop_reason(cause),
-        },
+            ..
+        } => {
+            log_error(error);
+            RemoteError::Unconfirmed {
+                doc_id: DocId::new(document_id.clone()),
+                checksum: checksum.clone(),
+            }
+        }
         ApiError::NameTaken | ApiError::VersionChanged | ApiError::Rejected { .. } => {
             RemoteError::Changed
         }
@@ -370,14 +372,19 @@ fn without_addresses(text: &str) -> String {
         .join(" ")
 }
 
-/// What a failed call means for the run.
-pub fn stop_reason(error: &ApiError) -> StopReason {
-    // For the service's journal (journalctl --user -u ikeloud): why a run
-    // stopped. The texts carry no personal data (see ApiError).
+/// For the service's journal (journalctl --user -u ikeloud): a failed
+/// call. The texts carry no personal data (see ApiError), addresses are
+/// left out.
+fn log_error(error: &ApiError) {
     #[allow(clippy::print_stderr)]
     {
         eprintln!("iCloud: {}", without_addresses(&error.to_string()));
     }
+}
+
+/// What a failed call means for the run.
+pub fn stop_reason(error: &ApiError) -> StopReason {
+    log_error(error);
     match error {
         // "Try again later" (503 RETRY when too many writes at once, 429,
         // a gateway in between): like an outage, the run retries later with

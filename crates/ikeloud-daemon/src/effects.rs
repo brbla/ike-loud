@@ -30,9 +30,9 @@ impl From<RemoteError> for EffectError {
     fn from(e: RemoteError) -> Self {
         match e {
             RemoteError::Changed => Self::Changed,
-            RemoteError::Stop(reason) | RemoteError::Unconfirmed { reason, .. } => {
-                Self::Stop(reason)
-            }
+            RemoteError::Stop(reason) => Self::Stop(reason),
+            // Remembered by `upload`; the next run settles it.
+            RemoteError::Unconfirmed { .. } => Self::Changed,
         }
     }
 }
@@ -84,10 +84,10 @@ fn upload(
         // The content was sent in full, the document may be on iCloud:
         // remembered with iCloud's checksum, so the next listing can tell
         // (decision 0026) instead of taking it for a file new on both sides.
+        // Only this file waits for that; the run goes on (iCloud answers a
+        // single call with 502 now and then under load: not an outage).
         Err(RemoteError::Unconfirmed {
-            doc_id,
-            checksum,
-            reason,
+            doc_id, checksum, ..
         }) => {
             let upload = UnconfirmedUpload {
                 path: remote_path,
@@ -100,7 +100,7 @@ fn upload(
             if let Ok(mut list) = ctx.unconfirmed.lock() {
                 list.push(upload);
             }
-            return Err(EffectError::Stop(reason));
+            return Err(EffectError::Changed);
         }
         other => other?,
     }

@@ -154,6 +154,11 @@ fn settle_unconfirmed(
             }
             // Another content: the upload did not land (or was replaced).
             (Some(_), Some(_)) => db.settle_unconfirmed(seq, None)?,
+            // Not there, and another document holds its path (the file was
+            // uploaded again): it did not land.
+            (None, _) if listing.files.iter().any(|f| f.path == upload.path) => {
+                db.settle_unconfirmed(seq, None)?;
+            }
             _ if unix_secs(now).saturating_sub(upload.time) > UNCONFIRMED_KEPT => {
                 db.settle_unconfirmed(seq, None)?;
             }
