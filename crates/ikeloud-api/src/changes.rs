@@ -60,6 +60,9 @@ pub struct ZoneRecord {
     pub size: Option<u64>,
     /// Content hash as the server keeps it.
     pub basehash: Option<String>,
+    /// iCloud's checksum of a file's content (content records): the one an
+    /// upload of the same content gets ([`crate::ApiError::UploadUnconfirmed`]).
+    pub checksum: Option<String>,
 }
 
 /// One page of changes.
@@ -136,6 +139,10 @@ fn parse_record(record: &Value) -> Option<ZoneRecord> {
         extension: text("extension").filter(|e| !e.is_empty()),
         size: field(record, "size").and_then(Value::as_u64),
         basehash: text("basehash"),
+        checksum: field(record, "fileContent")
+            .and_then(|c| c.get("fileChecksum"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
     })
 }
 
@@ -225,10 +232,14 @@ mod tests {
 
         let content = json!({
             "recordName": "documentContent/6B9F", "recordType": "content", "recordChangeTag": "b",
-            "fields": {"size": {"value": 390363, "type": "INT64"}}
+            "fields": {
+                "size": {"value": 390363, "type": "INT64"},
+                "fileContent": {"value": {"fileChecksum": "AQxS5l6Q", "size": 390363}, "type": "ASSETID"}
+            }
         });
         let r = parse_record(&content).unwrap();
         assert_eq!((r.kind, r.size), (RecordKind::FileContent, Some(390363)));
+        assert_eq!(r.checksum.as_deref(), Some("AQxS5l6Q"));
 
         let folder = json!({"recordName": "directory/root", "recordType": "structure", "recordChangeTag": "4st"});
         let r = parse_record(&folder).unwrap();

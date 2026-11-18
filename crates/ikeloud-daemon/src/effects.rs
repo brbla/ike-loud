@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ikeloud_hash::HashingReader;
 use ikeloud_local::{DiskError, LocalDisk};
 use ikeloud_safety::{Action, ApprovedAction, ContentHash, LocalId, RelPath};
-use ikeloud_state::{JournalEntry, JournalKind, StateDb};
+use ikeloud_state::{JournalEntry, JournalKind, StateDb, UnconfirmedUpload};
 use ikeloud_sync::{ApplyResult, EffectError, Effects, StopReason, Transfer};
 
 use crate::remote::{Remote, RemoteError};
@@ -22,13 +22,17 @@ pub(crate) struct RunEffects<'a> {
     /// An action could not be recorded: no further action is carried out,
     /// so nothing more happens that the state does not know.
     pub(crate) record_failed: bool,
+    /// Uploads without an answer, from any thread, to be stored.
+    pub(crate) unconfirmed: Mutex<Vec<UnconfirmedUpload>>,
 }
 
 impl From<RemoteError> for EffectError {
     fn from(e: RemoteError) -> Self {
         match e {
             RemoteError::Changed => Self::Changed,
-            RemoteError::Stop(reason) => Self::Stop(reason),
+            RemoteError::Stop(reason) | RemoteError::Unconfirmed { reason, .. } => {
+                Self::Stop(reason)
+            }
         }
     }
 }
@@ -47,6 +51,7 @@ struct Ctx<'a> {
     disk: &'a LocalDisk,
     remote: &'a mut dyn Remote,
     now: SystemTime,
+    unconfirmed: &'a Mutex<Vec<UnconfirmedUpload>>,
 }
 
 /// Uploads the local file `path` (still `id`) with an approved action.
@@ -75,10 +80,31 @@ fn upload(
     }
     let file = ctx.disk.open(path, id).map_err(disk_error)?;
     let mut reader = HashingReader::new(file);
-    let written = ctx
-        .remote
-        .write(action, Some(&mut reader))?
-        .ok_or(EffectError::Stop(StopReason::UnknownResponse))?;
+    let written = match ctx.remote.write(action, Some(&mut reader)) {
+        // The content was sent in full, the document may be on iCloud:
+        // remembered with iCloud's checksum, so the next listing can tell
+        // (decision 0026) instead of taking it for a file new on both sides.
+        Err(RemoteError::Unconfirmed {
+            doc_id,
+            checksum,
+            reason,
+        }) => {
+            let upload = UnconfirmedUpload {
+                path: remote_path,
+                doc_id,
+                local: id,
+                hash: ContentHash::new(ikeloud_hash::hex(&reader.finish())),
+                checksum,
+                time: unix_secs(SystemTime::now()),
+            };
+            if let Ok(mut list) = ctx.unconfirmed.lock() {
+                list.push(upload);
+            }
+            return Err(EffectError::Stop(reason));
+        }
+        other => other?,
+    }
+    .ok_or(EffectError::Stop(StopReason::UnknownResponse))?;
     Ok(Some(Transfer {
         path: remote_path,
         doc_id: written.doc_id,
@@ -160,8 +186,10 @@ impl Effects for RunEffects<'_> {
             disk: self.disk,
             remote: &mut *self.remote,
             now: self.now,
+            unconfirmed: &self.unconfirmed,
         };
         let result = perform(&mut ctx, approved);
+        self.store_unconfirmed();
         if let Ok(transfer) = &result {
             // Recorded at once: a crash from here on forgets nothing. The
             // time of the action itself (a run can take long).
@@ -205,7 +233,7 @@ impl Effects for RunEffects<'_> {
             Mutex::new(actions.into_iter().enumerate().collect());
         let stop = AtomicBool::new(false);
         let mut results: Vec<Option<ApplyResult>> = (0..count).map(|_| None).collect();
-        let (disk, now) = (self.disk, self.now);
+        let (disk, now, unconfirmed) = (self.disk, self.now, &self.unconfirmed);
         let (sender, receiver) = mpsc::channel();
         std::thread::scope(|scope| {
             for mut fork in forks {
@@ -215,6 +243,7 @@ impl Effects for RunEffects<'_> {
                         disk,
                         remote: &mut *fork,
                         now,
+                        unconfirmed,
                     };
                     while !stop.load(Ordering::SeqCst) && !crate::shutting_down() {
                         let next = queue.lock().ok().and_then(|mut q| q.pop_front());
@@ -249,7 +278,24 @@ impl Effects for RunEffects<'_> {
                 }
             }
         });
+        self.store_unconfirmed();
         results
+    }
+}
+
+impl RunEffects<'_> {
+    /// Stores the uploads that got no answer.
+    fn store_unconfirmed(&mut self) {
+        let uploads = self
+            .unconfirmed
+            .get_mut()
+            .map(std::mem::take)
+            .unwrap_or_default();
+        for upload in uploads {
+            if self.db.add_unconfirmed(&upload).is_err() {
+                self.record_failed = true;
+            }
+        }
     }
 }
 

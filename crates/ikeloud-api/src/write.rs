@@ -332,6 +332,28 @@ impl<T: Transport> Client<T> {
         if let (Some(etag), Some(map)) = (etag, update.as_object_mut()) {
             map.insert("etag".to_string(), json!(etag));
         }
+        // From here on the document may be written even when no answer
+        // comes: such failures carry the content's checksum.
+        let checksum = file.file_checksum.clone();
+        let document_id = document_id.clone();
+        self.update_document(&update)
+            .map_err(|e| match (e, checksum) {
+                (
+                    cause @ (ApiError::Transport(_)
+                    | ApiError::Status { .. }
+                    | ApiError::Malformed { .. }),
+                    Some(checksum),
+                ) => ApiError::UploadUnconfirmed {
+                    document_id,
+                    checksum,
+                    cause: Box::new(cause),
+                },
+                (e, _) => e,
+            })
+    }
+
+    /// Step 3 of an upload: `update/documents`.
+    fn update_document(&mut self, update: &Value) -> Result<Uploaded, ApiError> {
         let url = self.docws_url("update/documents")?;
         let mut response = self.send_body(
             Method::Post,

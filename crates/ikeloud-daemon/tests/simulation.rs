@@ -299,6 +299,7 @@ struct World {
 struct Stats {
     runs: usize,
     outages: usize,
+    lost_answers: usize,
     crashes: usize,
     confirmations: usize,
     actions: usize,
@@ -383,6 +384,19 @@ impl World {
             self.icloud.offline_after = Some(self.user.rng.below(3));
             self.stats.outages += 1;
         }
+        // Listings without checksums now and then (the folders walked
+        // instead of CloudKit), and uploads that land on iCloud but whose
+        // answer is lost (decision 0026). Not both: a lost answer seen by a
+        // listing without checksums ends in a conflict copy of identical
+        // content (safe, nothing lost, see the sync test
+        // without_checksums_a_lost_answer_still_ends_safely_in_a_conflict_copy),
+        // which the duplicate check below rightly counts as a needless copy.
+        let unconfirmed = !self.db.unconfirmed().expect("state db").is_empty();
+        self.icloud.no_checksums = faults && !unconfirmed && self.user.rng.below(8) == 0;
+        if faults && !self.icloud.no_checksums && self.user.rng.below(5) == 0 {
+            self.icloud.lose_upload_answer = true;
+            self.stats.lost_answers += 1;
+        }
         let mode = std::cell::Cell::new(ikeloud_safety::Mode::Full);
         let setup = SyncSetup {
             disk: LocalDisk::new(
@@ -448,6 +462,8 @@ impl World {
             self.stats.crashes += 1;
         }
         self.icloud.offline_after = None;
+        self.icloud.lose_upload_answer = false;
+        self.icloud.no_checksums = false;
         done
     }
 
@@ -584,6 +600,7 @@ fn daemon_simulation() {
         }
         total.runs += world.stats.runs;
         total.outages += world.stats.outages;
+        total.lost_answers += world.stats.lost_answers;
         total.crashes += world.stats.crashes;
         total.confirmations += world.stats.confirmations;
         total.actions += world.stats.actions;
@@ -599,7 +616,7 @@ fn daemon_simulation() {
     let n = usize::try_from(seeds()).expect("small");
     assert!(total.actions > n * 5, "the runs must do something");
     assert!(
-        total.outages > n / 4 && total.crashes > n / 4,
+        total.outages > n / 4 && total.crashes > n / 4 && total.lost_answers > n / 4,
         "faults happen"
     );
     assert!(during > n / 4, "the user acts during runs");

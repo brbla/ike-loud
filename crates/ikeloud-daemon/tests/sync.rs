@@ -304,3 +304,109 @@ fn an_outage_in_a_parallel_group_loses_no_record() {
     );
     assert!(f.run().executed.done.is_empty());
 }
+
+/// Files and conflict copies on both sides after the fixture settled.
+fn conflict_copies(f: &Fixture) -> Vec<String> {
+    let mut all = f.files("root");
+    all.extend(f.icloud.files.keys().cloned());
+    all.retain(|p| p.contains("(conflict"));
+    all
+}
+
+#[test]
+fn an_upload_whose_answer_is_lost_is_recognized_by_its_checksum() {
+    let mut f = Fixture::new("lost-new");
+    f.write("a.txt", b"new on linux");
+    f.icloud.lose_upload_answer = true;
+    let r = f.run();
+    assert_eq!(r.executed.stopped, Some(StopReason::Offline));
+    assert_eq!(
+        f.icloud.content("a.txt"),
+        Some(&b"new on linux"[..]),
+        "it did land"
+    );
+    assert_eq!(f.db.unconfirmed().expect("read").len(), 1);
+
+    f.settle();
+    f.assert_in_sync();
+    assert_eq!(
+        conflict_copies(&f),
+        Vec::<String>::new(),
+        "no conflict copy"
+    );
+    assert!(f.db.unconfirmed().expect("read").is_empty(), "settled");
+    assert_eq!(f.db.base().expect("base").len(), 1);
+    let uploaded =
+        f.db.journal(10)
+            .expect("journal")
+            .iter()
+            .filter(|e| e.kind == JournalKind::Uploaded)
+            .count();
+    assert_eq!(uploaded, 1, "in the journal once");
+}
+
+#[test]
+fn a_lost_answer_for_a_new_version_needs_no_conflict_copy_either() {
+    let mut f = Fixture::new("lost-edit");
+    f.write("a.txt", b"v1");
+    f.settle();
+    f.write("a.txt", b"v2 from linux");
+    f.icloud.lose_upload_answer = true;
+    f.run();
+    f.settle();
+    f.assert_in_sync();
+    assert_eq!(conflict_copies(&f), Vec::<String>::new());
+    assert_eq!(f.icloud.content("a.txt"), Some(&b"v2 from linux"[..]));
+}
+
+#[test]
+fn a_file_edited_after_a_lost_answer_keeps_both_versions() {
+    // A transfer proves both sides equal only while neither changed (the
+    // common state's rule, also for runs that crashed): the edited file is
+    // new on both sides, so iCloud's copy wins and the edit is kept as a
+    // conflict copy. Rare (an edit within a minute of a lost answer);
+    // nothing is lost.
+    let mut f = Fixture::new("lost-then-edit");
+    f.write("a.txt", b"first");
+    f.icloud.lose_upload_answer = true;
+    f.run();
+    f.write("a.txt", b"second, longer");
+    f.settle();
+    f.assert_in_sync();
+    assert_eq!(f.icloud.content("a.txt"), Some(&b"first"[..]));
+    assert_eq!(
+        f.icloud.content("a.txt (conflict 1)"),
+        Some(&b"second, longer"[..])
+    );
+    assert!(f.db.unconfirmed().expect("read").is_empty(), "settled");
+}
+
+#[test]
+fn without_checksums_a_lost_answer_still_ends_safely_in_a_conflict_copy() {
+    let mut f = Fixture::new("lost-walk");
+    f.write("a.txt", b"x");
+    f.icloud.no_checksums = true;
+    f.icloud.lose_upload_answer = true;
+    f.run();
+    f.settle();
+    f.assert_in_sync();
+    // Nothing lost: both copies hold the content.
+    assert_eq!(conflict_copies(&f).len(), 2, "the copy, on both sides");
+    assert_eq!(f.icloud.content("a.txt"), Some(&b"x"[..]));
+}
+
+#[test]
+fn a_file_moved_on_icloud_after_a_lost_answer_is_moved_locally() {
+    // Found by the daemon simulation: matched by document, not by path.
+    let mut f = Fixture::new("lost-moved");
+    f.write("a.txt", b"content");
+    f.icloud.lose_upload_answer = true;
+    f.run();
+    let moved = f.icloud.files.remove("a.txt").expect("landed");
+    f.icloud.folders.insert("d".into());
+    f.icloud.files.insert("d/e.txt".into(), moved);
+    f.settle();
+    f.assert_in_sync();
+    assert_eq!(f.files("root"), ["d/e.txt"]);
+    assert_eq!(conflict_copies(&f), Vec::<String>::new());
+}

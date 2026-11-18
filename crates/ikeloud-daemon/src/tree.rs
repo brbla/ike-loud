@@ -34,8 +34,8 @@ struct Node {
     folder: bool,
     /// From the structure record: the node exists in the tree.
     structure: Option<Structure>,
-    /// From the content record (files): change tag and size.
-    content: Option<(String, u64)>,
+    /// From the content record (files): change tag, size, checksum.
+    content: Option<(String, u64, Option<String>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,7 +127,7 @@ impl CloudTree {
                         continue;
                     }
                     let node = self.nodes.entry(r.id).or_default();
-                    node.content = Some((r.change_tag, r.size.unwrap_or(0)));
+                    node.content = Some((r.change_tag, r.size.unwrap_or(0), r.checksum));
                 }
                 RecordKind::Other => {}
             }
@@ -229,11 +229,14 @@ impl CloudTree {
                 ));
                 continue;
             }
-            let (content_tag, size) = node
+            let (content_tag, size, checksum) = node
                 .content
                 .clone()
                 .ok_or_else(|| Unusable(format!("{path}: a file without its content")))?;
             let etag = format!("{}::{content_tag}", structure.change_tag);
+            if let Some(checksum) = checksum {
+                built.listing.checksums.insert(rel.clone(), checksum);
+            }
             built.listing.files.push(RemoteFile {
                 path: rel.clone(),
                 doc_id: DocId::new(id.clone()),
@@ -273,6 +276,7 @@ mod tests {
             extension: None,
             size: None,
             basehash: None,
+            checksum: None,
         }
     }
 
@@ -295,6 +299,7 @@ mod tests {
             extension: None,
             size: Some(size),
             basehash: None,
+            checksum: None,
         }
     }
 

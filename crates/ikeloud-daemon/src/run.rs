@@ -11,11 +11,12 @@ use ikeloud_safety::{
 use ikeloud_state::{BaseChange, JournalEntry, JournalKind, StateDb, StateError};
 use ikeloud_sync::names::key;
 use ikeloud_sync::{
-    BaseEntry, Collision, RemoteFile, Report, States, StopReason, build_plan, execute, next_base,
+    BaseEntry, Collision, RemoteFile, Report, States, StopReason, Transfer, build_plan, execute,
+    next_base,
 };
 
 use crate::effects::{RunEffects, unix_secs};
-use crate::remote::Remote;
+use crate::remote::{Listing, Remote};
 
 /// How a run ended.
 #[derive(Debug)]
@@ -114,6 +115,54 @@ pub struct ExecutedRun {
     now: SystemTime,
 }
 
+/// How long an upload without an answer waits for a listing that shows
+/// it; after that it is taken for one that never reached iCloud.
+const UNCONFIRMED_KEPT: u64 = 24 * 60 * 60;
+
+/// Uploads whose last step got no answer (decision 0026): a listing that
+/// shows their document with the uploaded content (iCloud's checksum)
+/// proves the upload, as its answer would have; it becomes a recorded
+/// transfer, which goes into the common state below like the transfers of
+/// a run that crashed. Without that, the plan would take the file for one
+/// new on both sides and make a conflict copy of it. The transfer keeps the
+/// path the upload went to, so a move on iCloud since then is seen as one.
+/// Listings without checksums (the folders walked) settle nothing.
+fn settle_unconfirmed(
+    db: &mut StateDb,
+    listing: &Listing,
+    now: SystemTime,
+) -> Result<(), StateError> {
+    for (seq, upload) in db.unconfirmed()? {
+        let file = listing.files.iter().find(|f| f.doc_id == upload.doc_id);
+        let checksum = file.and_then(|f| listing.checksums.get(&f.path));
+        match (file, checksum) {
+            (Some(file), Some(checksum)) if *checksum == upload.checksum => {
+                let transfer = Transfer {
+                    path: upload.path.clone(),
+                    doc_id: upload.doc_id,
+                    etag: file.etag.clone(),
+                    local: upload.local,
+                    hash: upload.hash,
+                };
+                let entry = JournalEntry {
+                    time: upload.time,
+                    kind: JournalKind::Uploaded,
+                    path: upload.path,
+                    target: None,
+                };
+                db.settle_unconfirmed(seq, Some((&entry, &transfer)))?;
+            }
+            // Another content: the upload did not land (or was replaced).
+            (Some(_), Some(_)) => db.settle_unconfirmed(seq, None)?,
+            _ if unix_secs(now).saturating_sub(upload.time) > UNCONFIRMED_KEPT => {
+                db.settle_unconfirmed(seq, None)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// The first part of a run, see [`Started`].
 pub fn start_run(
     setup: &SyncSetup<'_>,
@@ -137,6 +186,7 @@ pub fn start_run(
         Ok(l) => l,
         Err(reason) => return Ok(Started::Ended(RunOutcome::RemoteUnavailable(reason))),
     };
+    settle_unconfirmed(db, &listing, now)?;
     let mut states = States {
         local: local.files,
         remote: listing.files,
@@ -182,6 +232,7 @@ pub fn start_run(
         db,
         now,
         record_failed: false,
+        unconfirmed: std::sync::Mutex::new(Vec::new()),
     };
     let executed = execute(approved, &mut effects);
     // The brake window starts again after what the user confirmed, and only

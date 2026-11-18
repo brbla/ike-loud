@@ -1,5 +1,6 @@
 //! The server side of a sync run.
 
+use std::collections::BTreeMap;
 use std::io::Read;
 
 use ikeloud_safety::{ApprovedAction, Etag, RelPath};
@@ -12,6 +13,9 @@ pub struct Listing {
     pub files: Vec<RemoteFile>,
     /// Folders (also empty ones).
     pub folders: Vec<RelPath>,
+    /// iCloud's checksum of a file's content, where the listing has it
+    /// (from CloudKit; not when the folders were walked).
+    pub checksums: BTreeMap<RelPath, String>,
 }
 
 /// Content of a server file being downloaded.
@@ -34,13 +38,24 @@ pub struct Written {
 }
 
 /// Why a server operation did not happen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteError {
     /// A precondition no longer holds (the etag differs, the name is
     /// taken, the file is gone). Nothing was changed.
     Changed,
     /// Further work makes no sense now.
     Stop(StopReason),
+    /// An upload's content reached iCloud but the document got no answer
+    /// (it may be there); `checksum` is iCloud's checksum of the content.
+    /// Stops the run like [`RemoteError::Stop`].
+    Unconfirmed {
+        /// The document written.
+        doc_id: DocId,
+        /// iCloud's checksum of the uploaded content.
+        checksum: String,
+        /// Why the run stops.
+        reason: StopReason,
+    },
 }
 
 /// The server: the iCloud client, or a fake in tests.
