@@ -879,3 +879,70 @@ fn a_plan_is_confirmed_only_if_the_confirmation_covers_it() {
         assert_eq!(confirmed(plan, context), expected, "{name}");
     }
 }
+
+// --- folders (decision 0027) ----------------------------------------------------
+
+fn trash_folder(path: &str, etag: &str) -> Action {
+    Action::TrashRemoteFolder {
+        path: p(path),
+        expected_etag: e(etag),
+    }
+}
+
+#[test]
+fn folders_count_for_the_brake_and_their_versions_are_checked() {
+    let mut c = context(200);
+    for i in 0..60 {
+        c.remote_folder_etags.insert(p(&format!("d{i}")), e("f1"));
+    }
+    let removals: Vec<Action> = (0..60)
+        .map(|i| Action::RemoveLocalFolder {
+            path: p(&format!("d{i}")),
+        })
+        .collect();
+    let trashes: Vec<Action> = (0..60)
+        .map(|i| trash_folder(&format!("d{i}"), "f1"))
+        .collect();
+    let creations: Vec<Action> = (0..60)
+        .map(|i| Action::CreateLocalFolder {
+            path: p(&format!("n{i}")),
+        })
+        .collect();
+    assert!(
+        mass_change(&run(removals, &c)).is_some(),
+        "local removals count"
+    );
+    assert!(
+        mass_change(&run(trashes, &c)).is_some(),
+        "iCloud trash counts"
+    );
+    assert_eq!(run(creations, &c), ok(60), "creations do not");
+
+    assert_eq!(run(vec![trash_folder("d1", "f1")], &c), ok(1));
+    assert_eq!(
+        run(vec![trash_folder("d1", "changed")], &c),
+        Outcome::Rejected(Rejection::Conflict(vec![p("d1")])),
+        "another version on iCloud"
+    );
+    assert_eq!(
+        run(vec![trash_folder("gone", "f1")], &c),
+        Outcome::Rejected(Rejection::Conflict(vec![p("gone")])),
+        "not on iCloud"
+    );
+}
+
+#[test]
+fn read_only_defers_the_icloud_trash_but_not_local_folders() {
+    let mut c = context(10);
+    c.remote_folder_etags.insert(p("d"), e("f1"));
+    c.mode = Mode::ReadOnly(ReadOnlyReason::Settings);
+    let plan = vec![
+        trash_folder("d", "f1"),
+        Action::CreateLocalFolder { path: p("n") },
+        Action::RemoveLocalFolder { path: p("old") },
+    ];
+    assert_eq!(
+        run(plan, &c),
+        deferred(2, vec![DeferReason::ReadOnly(ReadOnlyReason::Settings)])
+    );
+}

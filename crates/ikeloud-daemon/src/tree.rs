@@ -219,6 +219,10 @@ impl CloudTree {
             let parent_drivewsid = drive_id("FOLDER", &parent_id(structure));
             if node.folder {
                 built.listing.folders.push(rel.clone());
+                built
+                    .listing
+                    .folder_etags
+                    .insert(rel.clone(), Etag::new(structure.change_tag.clone()));
                 built.folders.push((
                     rel.as_str().to_string(),
                     FolderIds {

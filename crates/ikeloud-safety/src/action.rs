@@ -300,6 +300,24 @@ pub enum Action {
         /// The file the engine saw at `from`.
         local_id: LocalId,
     },
+    /// Create a local folder (decision 0027).
+    CreateLocalFolder {
+        /// Path of the new folder.
+        path: RelPath,
+    },
+    /// Remove a local folder, only if it is empty (`rmdir`): nothing in it
+    /// can be lost, so it does not go to the trash.
+    RemoveLocalFolder {
+        /// The folder.
+        path: RelPath,
+    },
+    /// Move an empty server folder to "Recently Deleted".
+    TrashRemoteFolder {
+        /// The folder.
+        path: RelPath,
+        /// Version the engine knows.
+        expected_etag: Etag,
+    },
 }
 
 impl Action {
@@ -312,7 +330,10 @@ impl Action {
             | Self::UploadConflictCopy { path, .. }
             | Self::CreateRemoteFolder { path }
             | Self::TrashRemote { path, .. }
-            | Self::TrashLocal { path, .. } => path,
+            | Self::TrashLocal { path, .. }
+            | Self::CreateLocalFolder { path }
+            | Self::RemoveLocalFolder { path }
+            | Self::TrashRemoteFolder { path, .. } => path,
             Self::MoveRemote { to, .. } | Self::MoveLocal { to, .. } => to,
         }
     }
@@ -326,6 +347,7 @@ impl Action {
                 | Self::CreateRemoteFolder { .. }
                 | Self::TrashRemote { .. }
                 | Self::MoveRemote { .. }
+                | Self::TrashRemoteFolder { .. }
         )
     }
 
@@ -347,7 +369,10 @@ impl Action {
             | Self::TrashRemote { .. }
             | Self::Download { .. }
             | Self::TrashLocal { .. }
-            | Self::MoveLocal { .. } => None,
+            | Self::MoveLocal { .. }
+            | Self::CreateLocalFolder { .. }
+            | Self::RemoveLocalFolder { .. }
+            | Self::TrashRemoteFolder { .. } => None,
         }
     }
 
@@ -390,6 +415,20 @@ impl Action {
                 None,
                 expected.hash.as_str().to_owned(),
             ),
+            // Empty folders, but deletions all the same: a plan deleting many
+            // of them is a mass change too.
+            Self::RemoveLocalFolder { path } => {
+                (ChangeKind::TrashLocal, path, None, "folder".to_owned())
+            }
+            Self::TrashRemoteFolder {
+                path,
+                expected_etag,
+            } => (
+                ChangeKind::TrashRemote,
+                path,
+                None,
+                expected_etag.as_str().to_owned(),
+            ),
             Self::MoveRemote {
                 from,
                 to,
@@ -416,7 +455,8 @@ impl Action {
             Self::Upload { .. }
             | Self::Download { .. }
             | Self::UploadConflictCopy { .. }
-            | Self::CreateRemoteFolder { .. } => return None,
+            | Self::CreateRemoteFolder { .. }
+            | Self::CreateLocalFolder { .. } => return None,
         };
         Some(Change {
             kind,

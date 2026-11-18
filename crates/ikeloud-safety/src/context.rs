@@ -124,6 +124,8 @@ pub struct Context {
     pub synced_count: u64,
     /// Current server versions from a fresh listing, by path.
     pub remote_etags: BTreeMap<RelPath, Etag>,
+    /// Current server folder versions from the same listing, by path.
+    pub remote_folder_etags: BTreeMap<RelPath, Etag>,
     /// Sync mode.
     pub mode: Mode,
     /// Brake thresholds.
@@ -157,6 +159,7 @@ impl Context {
             remote_item_count: synced_count,
             synced_count,
             remote_etags: BTreeMap::new(),
+            remote_folder_etags: BTreeMap::new(),
             mode: Mode::Full,
             limits: MassChangeLimits::default(),
             recent: RecentChanges::default(),

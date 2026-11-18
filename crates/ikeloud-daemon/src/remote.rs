@@ -13,6 +13,8 @@ pub struct Listing {
     pub files: Vec<RemoteFile>,
     /// Folders (also empty ones).
     pub folders: Vec<RelPath>,
+    /// Their versions (decision 0027: a folder is trashed only unchanged).
+    pub folder_etags: BTreeMap<RelPath, Etag>,
     /// iCloud's checksum of a file's content, where the listing has it
     /// (from CloudKit; not when the folders were walked).
     pub checksums: BTreeMap<RelPath, String>,

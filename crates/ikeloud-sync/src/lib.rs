@@ -8,6 +8,7 @@
 
 pub mod base;
 pub mod execute;
+pub mod folders;
 pub mod names;
 mod pairing;
 pub mod plan;
@@ -15,6 +16,7 @@ pub mod state;
 
 pub use base::{Transfer, next_base};
 pub use execute::{ApplyResult, EffectError, Effects, Report, StopReason, execute, independent};
+pub use folders::{FolderPlan, FolderStates, next_base_folders, plan_folders};
 pub use ikeloud_safety::{ContentHash, LocalId};
 pub use plan::{Collision, Plan, Side, build_plan};
 pub use state::{BaseEntry, DocId, LocalFile, RemoteFile, States};

@@ -160,6 +160,11 @@ impl Remote for FakeICloud {
                 .iter()
                 .map(|p| RelPath::parse(p.as_str()).expect("path"))
                 .collect(),
+            folder_etags: self
+                .folders
+                .iter()
+                .map(|p| (RelPath::parse(p.as_str()).expect("path"), folder_etag(p)))
+                .collect(),
             checksums: if self.no_checksums {
                 BTreeMap::new()
             } else {
@@ -215,6 +220,11 @@ impl Remote for FakeICloud {
         }
         result
     }
+}
+
+/// The fake's folder version (a folder never changes in the fake).
+pub fn folder_etag(path: &str) -> Etag {
+    Etag::new(format!("folder:{path}"))
 }
 
 /// The fake's content checksum (iCloud's is SHA-1 based; any content hash
@@ -277,6 +287,36 @@ impl FakeICloud {
                 }
                 let f = self.files.remove(from.as_str()).expect("matched");
                 self.files.insert(to.as_str().into(), f);
+                Ok(None)
+            }
+            Action::TrashRemoteFolder {
+                path,
+                expected_etag,
+            } => {
+                if !self.folders.contains(path.as_str())
+                    || *expected_etag != folder_etag(path.as_str())
+                {
+                    return Err(RemoteError::Changed);
+                }
+                // Like the daemon's iCloud remote: emptiness is checked
+                // again right before the trash.
+                let prefix = format!("{}/", path.as_str());
+                if self.files.keys().any(|p| p.starts_with(&prefix))
+                    || self.folders.iter().any(|f| f.starts_with(&prefix))
+                {
+                    return Err(RemoteError::Changed);
+                }
+                let inside: Vec<String> = self
+                    .files
+                    .keys()
+                    .filter(|p| p.starts_with(&prefix))
+                    .cloned()
+                    .collect();
+                for p in inside {
+                    self.delete(&p);
+                }
+                self.folders
+                    .retain(|f| f != path.as_str() && !f.starts_with(&prefix));
                 Ok(None)
             }
             other => panic!("not a server write: {other:?}"),
@@ -441,6 +481,36 @@ impl Fixture {
             .map(|(p, f)| (p.clone(), f.content.clone()))
             .collect();
         assert_eq!(local, remote, "local and iCloud differ");
+    }
+
+    /// Local folders, as relative paths, sorted.
+    pub fn local_folders(&self) -> Vec<String> {
+        fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+            for e in fs::read_dir(dir).expect("read dir") {
+                let p = e.expect("entry").path();
+                if p.is_dir() {
+                    out.push(
+                        p.strip_prefix(base)
+                            .expect("under")
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                    walk(&p, base, out);
+                }
+            }
+        }
+        let root = self.root();
+        let mut out = Vec::new();
+        walk(&root, &root, &mut out);
+        out.sort();
+        out
+    }
+
+    /// Files and folders the same on both sides.
+    pub fn assert_folders_in_sync(&self) {
+        self.assert_in_sync();
+        let remote: Vec<String> = self.icloud.folders.iter().cloned().collect();
+        assert_eq!(self.local_folders(), remote, "folders differ");
     }
 }
 

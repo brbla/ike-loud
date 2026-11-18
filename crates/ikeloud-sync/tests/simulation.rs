@@ -565,6 +565,11 @@ impl World {
         let changed = Err(EffectError::Changed);
         match action {
             Action::CreateRemoteFolder { .. } => Ok(None),
+            // This simulation plans files only; folders (plan_folders) are
+            // simulated by the daemon's simulation.
+            Action::CreateLocalFolder { .. }
+            | Action::RemoveLocalFolder { .. }
+            | Action::TrashRemoteFolder { .. } => panic!("not planned here: {action:?}"),
             Action::Upload {
                 local,
                 remote,

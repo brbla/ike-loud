@@ -335,7 +335,10 @@ fn journal_kind_names_are_stable() {
             "folder-created",
             "overwritten-remote",
             "overwritten-local",
-            "mass-change-confirmed"
+            "mass-change-confirmed",
+            "folder-created-local",
+            "folder-removed-local",
+            "folder-trashed-remote"
         ]
     );
     for k in JournalKind::ALL {
@@ -487,4 +490,32 @@ fn unconfirmed_uploads_settle_into_pending_transfers() {
     assert!(db.unconfirmed().expect("read").is_empty());
     assert_eq!(db.pending().expect("pending"), vec![proved]);
     assert_eq!(db.journal(10).expect("journal").len(), 1);
+}
+
+#[test]
+fn folders_of_the_common_state_are_recorded_once_then_kept() {
+    let dir = TempDir::new("folders");
+    {
+        let mut db = StateDb::open(&dir.db()).expect("create");
+        assert_eq!(db.base_folders().expect("read"), None, "never recorded");
+        db.set_base_folders(&[
+            RelPath::parse("a").expect("p"),
+            RelPath::parse("a/B").expect("p"),
+        ])
+        .expect("set");
+    }
+    let mut db = StateDb::open(&dir.db()).expect("reopen");
+    assert_eq!(
+        db.base_folders().expect("read"),
+        Some(vec![
+            RelPath::parse("a").expect("p"),
+            RelPath::parse("a/B").expect("p")
+        ])
+    );
+    db.set_base_folders(&[]).expect("set");
+    assert_eq!(
+        db.base_folders().expect("read"),
+        Some(vec![]),
+        "recorded, empty"
+    );
 }

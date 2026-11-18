@@ -127,7 +127,8 @@ fn perform(ctx: &mut Ctx<'_>, approved: ApprovedAction) -> Result<Option<Transfe
         }
         Action::CreateRemoteFolder { .. }
         | Action::TrashRemote { .. }
-        | Action::MoveRemote { .. } => {
+        | Action::MoveRemote { .. }
+        | Action::TrashRemoteFolder { .. } => {
             ctx.remote.write(approved, None)?;
             Ok(None)
         }
@@ -166,6 +167,14 @@ fn perform(ctx: &mut Ctx<'_>, approved: ApprovedAction) -> Result<Option<Transfe
             ctx.disk
                 .move_file(&from, &to, local_id)
                 .map_err(disk_error)?;
+            Ok(None)
+        }
+        Action::CreateLocalFolder { path } => {
+            ctx.disk.create_folder(&path).map_err(disk_error)?;
+            Ok(None)
+        }
+        Action::RemoveLocalFolder { path } => {
+            ctx.disk.remove_empty_folder(&path).map_err(disk_error)?;
             Ok(None)
         }
     }
@@ -328,6 +337,9 @@ pub(crate) fn journal_entry(action: &Action, time: u64) -> JournalEntry {
         Action::Download { local, .. } => (JournalKind::Downloaded, local, None),
         Action::TrashLocal { path, .. } => (JournalKind::TrashedLocal, path, None),
         Action::MoveLocal { from, to, .. } => (JournalKind::MovedLocal, from, Some(to)),
+        Action::CreateLocalFolder { path } => (JournalKind::FolderCreatedLocal, path, None),
+        Action::RemoveLocalFolder { path } => (JournalKind::FolderRemovedLocal, path, None),
+        Action::TrashRemoteFolder { path, .. } => (JournalKind::FolderTrashedRemote, path, None),
     };
     JournalEntry {
         time,
