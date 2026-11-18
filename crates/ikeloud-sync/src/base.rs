@@ -54,7 +54,9 @@ pub fn next_base(old: &[BaseEntry], after: &States, transfers: &[Transfer]) -> V
     let old_by_doc: BTreeMap<&DocId, &BaseEntry> = old.iter().map(|b| (&b.doc_id, b)).collect();
     let index = LocalIndex::new(&after.local, old);
 
-    let mut next: Vec<BaseEntry> = Vec::new();
+    // Each entry with a second path that tells the planner the same
+    // (see `common_path`), for when another entry holds the first.
+    let mut next: Vec<(BaseEntry, Option<RelPath>)> = Vec::new();
     let mut used_docs: BTreeSet<DocId> = BTreeSet::new();
     let mut used_local: BTreeSet<LocalId> = BTreeSet::new();
 
@@ -71,14 +73,18 @@ pub fn next_base(old: &[BaseEntry], after: &States, transfers: &[Transfer]) -> V
         if r.etag != t.etag || l.hash != t.hash || used_local.contains(&l.id) {
             continue;
         }
-        next.push(BaseEntry {
-            path: common_path(Some(old_by_doc.get(doc).map_or(&t.path, |b| &b.path)), l, r),
-            local_path: l.path.clone(),
-            local: Some(l.id),
-            doc_id: doc.clone(),
-            hash: t.hash.clone(),
-            etag: t.etag.clone(),
-        });
+        let old = old_by_doc.get(doc).map_or(&t.path, |b| &b.path);
+        next.push((
+            BaseEntry {
+                path: common_path(Some(old), l, r),
+                local_path: l.path.clone(),
+                local: Some(l.id),
+                doc_id: doc.clone(),
+                hash: t.hash.clone(),
+                etag: t.etag.clone(),
+            },
+            second_path(old, l, r),
+        ));
         used_docs.insert(doc.clone());
         used_local.insert(l.id);
     }
@@ -105,21 +111,50 @@ pub fn next_base(old: &[BaseEntry], after: &States, transfers: &[Transfer]) -> V
         // own, as in NewBase of the TLA+ models): a path nobody holds may be
         // taken by another document, which would then collide with this
         // entry (found by the daemon simulation).
+        let mut second = None;
         entry.path = match (l, r) {
-            (Some(l), Some(r)) => common_path(Some(&b.path), l, r),
+            (Some(l), Some(r)) => {
+                second = second_path(&b.path, l, r);
+                common_path(Some(&b.path), l, r)
+            }
             (Some(l), None) => l.path.clone(),
             (None, Some(r)) => r.path.clone(),
             (None, None) => b.path.clone(),
         };
         used_local.extend(entry.local);
         used_docs.insert(b.doc_id.clone());
-        next.push(entry);
+        next.push((entry, second));
     }
 
-    // 3. Names and local files stay unique; entries from step 1 (proven) win.
+    // 3. Names and local files stay unique; entries from step 1 (proven)
+    //    win. Entries with a second path give way: two files that swapped
+    //    places while one also moved on iCloud may both want one name
+    //    (found by the daemon simulation; dropping one made a needless
+    //    copy of it). The second path is used only where no file stands.
+    let held: BTreeSet<String> = after
+        .local
+        .iter()
+        .map(|f| key(f.path.as_str()))
+        .chain(after.remote.iter().map(|f| key(f.path.as_str())))
+        .collect();
     let mut names: BTreeSet<String> = BTreeSet::new();
+    let mut kept: Vec<Option<BaseEntry>> = Vec::with_capacity(next.len());
+    for (entry, second) in &next {
+        let first = second.is_none() && names.insert(key(entry.path.as_str()));
+        kept.push(first.then(|| entry.clone()));
+    }
+    for ((entry, second), slot) in next.iter().zip(kept.iter_mut()) {
+        let Some(second) = second else { continue };
+        if names.insert(key(entry.path.as_str())) {
+            *slot = Some(entry.clone());
+        } else if !held.contains(&key(second.as_str())) && names.insert(key(second.as_str())) {
+            let mut moved = entry.clone();
+            moved.path = second.clone();
+            *slot = Some(moved);
+        }
+    }
+    let mut next: Vec<BaseEntry> = kept.into_iter().flatten().collect();
     let mut slots: BTreeSet<(u64, u64)> = BTreeSet::new();
-    next.retain(|b| names.insert(key(b.path.as_str())));
     for b in &mut next {
         if let Some(id) = b.local
             && !slots.insert((id.device, id.inode))
@@ -141,6 +176,16 @@ pub fn next_base(old: &[BaseEntry], after: &States, transfers: &[Transfer]) -> V
 /// for this one (found by the simulation). So: the old path while the server
 /// side is still there (the local side moved), otherwise the local path (the
 /// server side moved; the planner then follows it, iCloud wins).
+/// The other path that tells the planner the same as [`common_path`]: when
+/// it took the local path (the server side moved, both sides differ from
+/// `old`), `old` says it too (both moved: iCloud wins, the local side
+/// follows). `None` otherwise.
+fn second_path(old: &RelPath, l: &LocalFile, r: &RemoteFile) -> Option<RelPath> {
+    let took_local =
+        !same_place(l.path.as_str(), r.path.as_str()) && !same_place(r.path.as_str(), old.as_str());
+    (took_local && !same_place(l.path.as_str(), old.as_str())).then(|| old.clone())
+}
+
 fn common_path(old: Option<&RelPath>, l: &LocalFile, r: &RemoteFile) -> RelPath {
     match old {
         _ if same_place(l.path.as_str(), r.path.as_str()) => r.path.clone(),
