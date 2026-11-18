@@ -1,6 +1,6 @@
 # 0025: Rychlejší synchronizace
 
-Datum: 2026-11-17 · Stav: kroky 1 a 2 přijaty vlastníkem a hotové, krok 3 čeká
+Datum: 2026-11-17 · Stav: všechny tři kroky přijaty vlastníkem a hotové
 
 ## Co je pomalé (měřeno na testovacím účtu, 1 506 složek, 1 462 souborů)
 
@@ -104,3 +104,19 @@ na kroku 2.
   `tokens/create` CloudKitu vrací 405 a služba `pushws` z účtu nemá
   záznam v DNS; linuxové nástroje se všechny dotazují. Zůstává dotaz se
   sync tokenem každou minutu.
+- **Krok 3 (18. 11. 2026):** naostro přejmenování na iCloudu (i se
+  zachovanou příponou) změní **obě** části verze (`4so::4sn` → `cr3::cr2`),
+  takže z verze nejde poznat, zda se změnil obsah; démon pak soubor stáhl
+  celý znovu a starou kopii uložil do historie. Kontrolní součet obsahu
+  (`fileChecksum`, viz 0026) se přejmenováním nemění (ověřeno).
+  Démon si proto pamatuje součet každého dokumentu u poslední vypsané
+  verze (schéma v5, `remote_checksums`; obnovuje se z každého výpisu
+  s CloudKitem a z odpovědi každého nahrání). Nová verze se stejným
+  součtem znamená stejný obsah: společný stav i zaznamenané přenosy
+  převezmou novou verzi a plánovač soubor jen přesune.
+  Simulace démona teď mění verzi při přesunu na iCloudu jako skutečný
+  iCloud. Ukázala, že bez součtů vznikaly zbytečné kopie (přenos
+  zaznamenaný před pádem nebo během běhu přestal platit, když uživatel
+  soubor mezitím na iCloudu přesunul); se součty projde 10 000 semínek.
+  Účet bez CloudKitu (procházení složek) se chová postaru: zbytečná kopie
+  je možná, ztráta obsahu ne. Simulace to ověřuje v osmině světů.

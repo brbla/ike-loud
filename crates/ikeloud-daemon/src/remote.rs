@@ -37,6 +37,8 @@ pub struct Written {
     pub doc_id: DocId,
     /// Its new version.
     pub etag: Etag,
+    /// iCloud's checksum of an uploaded content, if it gave one.
+    pub checksum: Option<String>,
 }
 
 /// Why a server operation did not happen.

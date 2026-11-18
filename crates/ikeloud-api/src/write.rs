@@ -50,6 +50,8 @@ pub struct Uploaded {
     pub docwsid: String,
     /// Its new version.
     pub etag: String,
+    /// iCloud's checksum of the content (`fileContent.fileChecksum`).
+    pub checksum: Option<String>,
 }
 
 /// A folder created on the server.
@@ -336,7 +338,12 @@ impl<T: Transport> Client<T> {
         // comes: such failures carry the content's checksum.
         let checksum = file.file_checksum.clone();
         let document_id = document_id.clone();
+        let sum = checksum.clone();
         self.update_document(&update)
+            .map(|uploaded| Uploaded {
+                checksum: sum,
+                ..uploaded
+            })
             .map_err(|e| match (e, checksum) {
                 (
                     cause @ (ApiError::Transport(_)
@@ -391,7 +398,11 @@ impl<T: Transport> Client<T> {
                 .map(str::to_string)
         };
         match (text("document_id"), text("etag")) {
-            (Some(docwsid), Some(etag)) => Ok(Uploaded { docwsid, etag }),
+            (Some(docwsid), Some(etag)) => Ok(Uploaded {
+                docwsid,
+                etag,
+                checksum: None,
+            }),
             _ => Err(ApiError::Malformed {
                 call: "update/documents",
                 what: "document without id or etag".to_string(),

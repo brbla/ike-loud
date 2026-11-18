@@ -497,7 +497,13 @@ fn folders_of_the_common_state_are_recorded_once_then_kept() {
     let dir = TempDir::new("folders");
     {
         let mut db = StateDb::open(&dir.db()).expect("create");
-        assert_eq!(db.base_folders().expect("read"), None, "never recorded");
+        assert_eq!(
+            db.base_folders().expect("read"),
+            Some(vec![]),
+            "a new database knows folders"
+        );
+        db.forget_folders_for_tests().expect("forget");
+        assert_eq!(db.base_folders().expect("read"), None, "as one from before");
         db.set_base_folders(&[
             RelPath::parse("a").expect("p"),
             RelPath::parse("a/B").expect("p"),
@@ -518,4 +524,25 @@ fn folders_of_the_common_state_are_recorded_once_then_kept() {
         Some(vec![]),
         "recorded, empty"
     );
+}
+
+#[test]
+fn remote_checksums_are_replaced_as_a_whole() {
+    use std::collections::BTreeMap;
+    let mut db = StateDb::open_in_memory().expect("open");
+    let doc = |d: &str| ikeloud_sync::DocId::new(d.to_string());
+    let mut sums = BTreeMap::new();
+    sums.insert(
+        doc("d1"),
+        (ikeloud_safety::Etag::new("a::b"), "AQ1".to_string()),
+    );
+    sums.insert(
+        doc("d2"),
+        (ikeloud_safety::Etag::new("c::d"), "AQ2".to_string()),
+    );
+    db.set_remote_checksums(&sums).expect("set");
+    assert_eq!(db.remote_checksums().expect("read"), sums);
+    sums.remove(&doc("d1"));
+    db.set_remote_checksums(&sums).expect("set");
+    assert_eq!(db.remote_checksums().expect("read"), sums);
 }

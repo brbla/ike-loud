@@ -136,6 +136,7 @@ fn written(doc: u64, etag: u64) -> Written {
     Written {
         doc_id: DocId::new(doc.to_string()),
         etag: Etag::new(etag.to_string()),
+        checksum: None,
     }
 }
 
@@ -211,7 +212,12 @@ impl Remote for FakeICloud {
                 Action::Upload { .. } | Action::UploadConflictCopy { .. }
             );
         let sum = checksum(&bytes);
-        let result = self.write_now(&action, bytes);
+        let result = self.write_now(&action, bytes).map(|w| {
+            w.map(|w| Written {
+                checksum: Some(sum.clone()),
+                ..w
+            })
+        });
         if lose_answer && let Ok(Some(written)) = &result {
             return Err(RemoteError::Unconfirmed {
                 doc_id: written.doc_id.clone(),
