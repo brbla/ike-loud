@@ -350,8 +350,35 @@ impl<T: Transport> Core<T> {
                 to,
                 expected_etag,
             } => self.move_remote(from, to, expected_etag).map(|()| None),
+            Action::TrashRemoteFolder { path, .. } => {
+                let folder = self.folder(path.as_str())?;
+                // Checked again right before (decision 0027): something put
+                // in it since the listing keeps it. Whether a folder's
+                // version changes with what is inside is not known, so the
+                // trash is conditional on the version just read instead.
+                let fresh = self
+                    .client
+                    .list_folder(&folder.drivewsid)
+                    .map_err(|e| write_error(&e))?;
+                if !fresh.items.is_empty() || fresh.name != path.name() {
+                    return Err(RemoteError::Changed);
+                }
+                self.client
+                    .trash(&folder.drivewsid, &fresh.etag)
+                    .map_err(|e| write_error(&e))?;
+                let mut maps = lock(&self.maps);
+                let prefix = format!("{}/", path.as_str());
+                maps.folders
+                    .retain(|p, _| p != path.as_str() && !p.starts_with(&prefix));
+                maps.items.retain(|p, _| !p.as_str().starts_with(&prefix));
+                Ok(None)
+            }
             // Local actions never reach the server.
-            Action::Download { .. } | Action::TrashLocal { .. } | Action::MoveLocal { .. } => {
+            Action::Download { .. }
+            | Action::TrashLocal { .. }
+            | Action::MoveLocal { .. }
+            | Action::CreateLocalFolder { .. }
+            | Action::RemoveLocalFolder { .. } => {
                 Err(RemoteError::Stop(StopReason::UnknownResponse))
             }
         }
@@ -525,6 +552,9 @@ impl<T: Transport + Clone + Send + 'static> ICloudRemote<T> {
                                     etag: item.etag.clone(),
                                 },
                             );
+                            listing
+                                .folder_etags
+                                .insert(item_path.clone(), Etag::new(item.etag.clone()));
                             listing.folders.push(item_path.clone());
                             queue.push_back((item.drivewsid.clone(), Some(item_path)));
                         }
@@ -571,7 +601,10 @@ impl<T: Transport + Clone + Send + 'static> ICloudRemote<T> {
                         f.size
                     )
                 })
-                .chain(l.folders.iter().map(|p| format!("folder {}", p.as_str())))
+                .chain(l.folders.iter().map(|p| {
+                    let etag = l.folder_etags.get(p).map_or("-", |e| e.as_str());
+                    format!("folder {} {etag}", p.as_str())
+                }))
                 .collect()
         };
         let (a, b) = (files(&from_changes), files(&walked));

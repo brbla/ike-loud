@@ -103,7 +103,11 @@ fn touched(action: &Action) -> Vec<String> {
         Action::Upload { local, remote, .. } => vec![local, remote],
         Action::UploadConflictCopy { path, .. } | Action::CreateRemoteFolder { path } => vec![path],
         Action::Download { remote, local, .. } => vec![remote, local],
-        Action::TrashRemote { path, .. } | Action::TrashLocal { path, .. } => vec![path],
+        Action::TrashRemote { path, .. }
+        | Action::TrashLocal { path, .. }
+        | Action::CreateLocalFolder { path }
+        | Action::RemoveLocalFolder { path }
+        | Action::TrashRemoteFolder { path, .. } => vec![path],
         Action::MoveRemote { from, to, .. } | Action::MoveLocal { from, to, .. } => vec![from, to],
     };
     paths

@@ -10,10 +10,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::{BaseChange, JournalEntry, JournalKind, StateError, UnconfirmedUpload};
 
 /// Schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Migrations: `MIGRATIONS[v]` brings version `v` to `v + 1`.
-const MIGRATIONS: [&str; 3] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3];
+const MIGRATIONS: [&str; 4] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
 
 const SCHEMA_V1: &str = "
 CREATE TABLE base (
@@ -69,6 +69,20 @@ CREATE TABLE unconfirmed (
     hash     TEXT NOT NULL CHECK (hash <> ''),
     checksum TEXT NOT NULL CHECK (checksum <> ''),
     time     INTEGER NOT NULL
+) STRICT;
+";
+
+/// Version 4: folders both sides had at the last sync (decision 0027).
+/// `folder_sync` has its one row once they were recorded: a database from
+/// before has none, and its first run only records (a folder on one side
+/// is not new, it may be one deleted on the other side before).
+const SCHEMA_V4: &str = "
+CREATE TABLE base_folders (
+    key  TEXT PRIMARY KEY NOT NULL CHECK (key <> ''),
+    path TEXT NOT NULL CHECK (path <> '')
+) STRICT;
+CREATE TABLE folder_sync (
+    id INTEGER PRIMARY KEY CHECK (id = 1)
 ) STRICT;
 ";
 
@@ -280,6 +294,45 @@ impl StateDb {
             });
         }
         Ok(transfers)
+    }
+
+    /// Folders both sides had at the last sync; `None` until they were
+    /// recorded once (decision 0027).
+    pub fn base_folders(&self) -> Result<Option<Vec<RelPath>>, StateError> {
+        let recorded: Option<i64> = self
+            .conn
+            .query_row("SELECT id FROM folder_sync", [], |r| r.get(0))
+            .optional()
+            .map_err(sql)?;
+        if recorded.is_none() {
+            return Ok(None);
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM base_folders ORDER BY key")
+            .map_err(sql)?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(sql)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(stored_path("base_folders", row.map_err(sql)?)?);
+        }
+        Ok(Some(out))
+    }
+
+    /// Replaces the folders of the common state, in one transaction.
+    pub fn set_base_folders(&mut self, folders: &[RelPath]) -> Result<(), StateError> {
+        let tx = self.conn.transaction().map_err(sql)?;
+        tx.execute("DELETE FROM base_folders", []).map_err(sql)?;
+        for path in folders {
+            tx.execute(
+                "INSERT OR REPLACE INTO base_folders (key, path) VALUES (?1, ?2)",
+                params![key(path.as_str()), path.as_str()],
+            )
+            .map_err(sql)?;
+        }
+        tx.execute("INSERT OR IGNORE INTO folder_sync (id) VALUES (1)", [])
+            .map_err(sql)?;
+        tx.commit().map_err(sql)
     }
 
     /// Remembers an upload whose last step got no answer.

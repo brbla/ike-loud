@@ -11,8 +11,8 @@ use ikeloud_safety::{
 use ikeloud_state::{BaseChange, JournalEntry, JournalKind, StateDb, StateError};
 use ikeloud_sync::names::key;
 use ikeloud_sync::{
-    BaseEntry, Collision, RemoteFile, Report, States, StopReason, Transfer, build_plan, execute,
-    next_base,
+    BaseEntry, Collision, FolderStates, RemoteFile, Report, States, StopReason, Transfer,
+    build_plan, execute, next_base, next_base_folders, plan_folders,
 };
 
 use crate::effects::{RunEffects, unix_secs};
@@ -113,6 +113,8 @@ pub struct ExecutedRun {
     busy: Vec<RelPath>,
     skipped: Vec<Skipped>,
     now: SystemTime,
+    /// Folders of the common state before the run (`None`: never recorded).
+    base_folders: Option<Vec<RelPath>>,
 }
 
 /// How long an upload without an answer waits for a listing that shows
@@ -192,6 +194,12 @@ pub fn start_run(
         Err(reason) => return Ok(Started::Ended(RunOutcome::RemoteUnavailable(reason))),
     };
     settle_unconfirmed(db, &listing, now)?;
+    let base_folders = db.base_folders()?;
+    let folder_states = FolderStates {
+        local: local.folders,
+        remote: listing.folder_etags.clone(),
+        base: base_folders.clone().unwrap_or_default(),
+    };
     let mut states = States {
         local: local.files,
         remote: listing.files,
@@ -207,7 +215,15 @@ pub fn start_run(
         db.commit(&changes(&states.base, &recovered), &[])?;
         states.base = recovered;
     }
-    let plan = build_plan(&states, settle_time, setup.conflict_name);
+    let mut plan = build_plan(&states, settle_time, setup.conflict_name);
+    // Folders (decision 0027); in a database from before, not until they
+    // were recorded once: a folder on one side may be one deleted on the
+    // other. A new sync (no common state yet) has nothing to protect.
+    if base_folders.is_some() || states.base.is_empty() {
+        let folders = plan_folders(&folder_states, &states, &plan.actions);
+        plan.actions.splice(0..0, folders.create);
+        plan.actions.extend(folders.remove);
+    }
 
     let mut context = Context::new(count(states.base.len()), key);
     context.local_folder = LocalFolderState::Available {
@@ -219,6 +235,7 @@ pub fn start_run(
         .iter()
         .map(|f| (f.path.clone(), f.etag.clone()))
         .collect();
+    context.remote_folder_etags = listing.folder_etags;
     context.settle_time = settle_time;
     context.mode = setup.mode.get();
     context.recent = recent_changes(db, now)?;
@@ -266,6 +283,7 @@ pub fn start_run(
         busy: plan.busy,
         skipped: local.skipped,
         now,
+        base_folders,
     }))
 }
 
@@ -288,12 +306,19 @@ impl ExecutedRun {
         // on both sides and make conflict copies of them. Should the
         // prediction be off, the next real listing shows a change on
         // iCloud, which is handled like any other.
-        let after_remote = remote
-            .list()
+        let listed = remote.list().ok();
+        let after_folders = listed.as_ref().map(|r| r.folders.clone());
+        let after_remote = listed
             .map(|r| r.files)
-            .unwrap_or_else(|_| predicted_remote(&self.remote_before, &self.executed));
+            .unwrap_or_else(|| predicted_remote(&self.remote_before, &self.executed));
         let committed = match scan_with(setup.disk.root(), self.now, hashes) {
             Ok(l) => {
+                // Without a fresh listing the folders stay as they were;
+                // the next run sees the difference and records it.
+                if let Some(remote_folders) = &after_folders {
+                    let old = self.base_folders.clone().unwrap_or_default();
+                    db.set_base_folders(&next_base_folders(&old, &l.folders, remote_folders))?;
+                }
                 let after = States {
                     local: l.files,
                     remote: after_remote,
@@ -365,9 +390,16 @@ fn predicted_remote(before: &[RemoteFile], report: &Report) -> Vec<RemoteFile> {
                     f.path = to.clone();
                 }
             }
+            // Empty when trashed; whatever is listed under it went with it.
+            Action::TrashRemoteFolder { path, .. } => {
+                let prefix = format!("{}/", path.as_str());
+                files.retain(|f| !f.path.as_str().starts_with(&prefix));
+            }
             Action::CreateRemoteFolder { .. }
             | Action::TrashLocal { .. }
-            | Action::MoveLocal { .. } => {}
+            | Action::MoveLocal { .. }
+            | Action::CreateLocalFolder { .. }
+            | Action::RemoveLocalFolder { .. } => {}
         }
     }
     files
@@ -391,12 +423,15 @@ fn recent_changes(db: &StateDb, now: SystemTime) -> Result<RecentChanges, StateE
             JournalKind::TrashedRemote
             | JournalKind::TrashedLocal
             | JournalKind::OverwrittenRemote
-            | JournalKind::OverwrittenLocal => recent.destructive += 1,
+            | JournalKind::OverwrittenLocal
+            | JournalKind::FolderRemovedLocal
+            | JournalKind::FolderTrashedRemote => recent.destructive += 1,
             JournalKind::MovedRemote | JournalKind::MovedLocal => recent.moves += 1,
             JournalKind::Uploaded
             | JournalKind::Downloaded
             | JournalKind::ConflictCopy
-            | JournalKind::FolderCreated => {}
+            | JournalKind::FolderCreated
+            | JournalKind::FolderCreatedLocal => {}
         }
     }
     Ok(recent)

@@ -3,6 +3,8 @@
 
 #![allow(clippy::expect_used, clippy::panic, clippy::indexing_slicing)] // test code
 
+use std::fs;
+
 mod common;
 
 use common::Fixture;
@@ -431,4 +433,108 @@ fn a_lost_answer_of_an_upload_that_did_not_land_is_forgotten_once_uploaded_again
     assert_eq!(f.icloud.content("a.txt"), Some(&b"x"[..]));
     assert!(f.db.unconfirmed().expect("read").is_empty(), "forgotten");
     assert_eq!(conflict_copies(&f), Vec::<String>::new());
+}
+
+#[test]
+fn empty_folders_are_created_on_the_other_side() {
+    let mut f = Fixture::new("folders-new");
+    f.settle(); // the first run records the folders
+    fs::create_dir_all(f.root().join("Linux/empty")).expect("mkdir");
+    f.icloud.folders.insert("iPhone".into());
+    f.settle();
+    f.assert_folders_in_sync();
+    assert_eq!(f.local_folders(), ["Linux", "Linux/empty", "iPhone"]);
+}
+
+#[test]
+fn a_folder_deleted_on_linux_goes_to_the_icloud_trash_after_its_files() {
+    let mut f = Fixture::new("folders-del-local");
+    f.write("keep.txt", b"an empty side stops sync: one file stays");
+    f.write("Old/a/x.txt", b"x");
+    fs::create_dir_all(f.root().join("Old/b")).expect("mkdir");
+    f.settle();
+    f.assert_folders_in_sync();
+    fs::remove_dir_all(f.root().join("Old")).expect("rm");
+    f.settle();
+    f.assert_folders_in_sync();
+    assert!(f.icloud.folders.is_empty(), "{:?}", f.icloud.folders);
+    assert_eq!(f.icloud.trash.len(), 1, "the file is in Recently Deleted");
+}
+
+#[test]
+fn a_folder_deleted_on_icloud_is_removed_locally_after_its_files() {
+    let mut f = Fixture::new("folders-del-remote");
+    f.icloud
+        .put("keep.txt", b"an empty side stops sync: one file stays");
+    f.icloud.put("Old/a/x.txt", b"x");
+    f.icloud.folders.insert("Old/b".into());
+    f.settle();
+    f.assert_folders_in_sync();
+    f.icloud.delete("Old/a/x.txt");
+    f.icloud.folders.clear();
+    f.settle();
+    f.assert_folders_in_sync();
+    assert_eq!(f.local_folders(), Vec::<String>::new());
+    assert_eq!(
+        f.files("trash/files"),
+        ["x.txt"],
+        "the file is in the system trash"
+    );
+}
+
+#[test]
+fn a_folder_deleted_on_icloud_keeps_what_linux_added() {
+    let mut f = Fixture::new("folders-del-remote-new");
+    f.icloud.folders.insert("Shared".into());
+    f.settle();
+    f.write("Shared/new.txt", b"new on linux");
+    f.icloud.folders.clear();
+    f.settle();
+    f.assert_folders_in_sync();
+    assert_eq!(
+        f.icloud.content("Shared/new.txt"),
+        Some(&b"new on linux"[..])
+    );
+}
+
+#[test]
+fn a_database_from_before_folders_only_records_them_first() {
+    // Folders on one side only when folder sync starts may be ones deleted
+    // on the other side before: neither created nor deleted, only the ones
+    // on both sides recorded.
+    let mut f = Fixture::new("folders-upgrade");
+    // A database from before: files in the common state, no folders.
+    f.write("keep.txt", b"synced before");
+    f.icloud.put("keep.txt", b"synced before");
+    let doc = f.icloud.files["keep.txt"].clone();
+    let entry = ikeloud_sync::BaseEntry {
+        path: ikeloud_safety::RelPath::parse("keep.txt").expect("path"),
+        local_path: ikeloud_safety::RelPath::parse("keep.txt").expect("path"),
+        local: None,
+        doc_id: ikeloud_sync::DocId::new(doc.doc.to_string()),
+        hash: ikeloud_safety::ContentHash::new(ikeloud_hash::hex(&ikeloud_hash::sha256(&[
+            b"synced before",
+        ]))),
+        etag: ikeloud_safety::Etag::new(doc.etag.to_string()),
+    };
+    f.db.commit(&[ikeloud_state::BaseChange::Set(entry)], &[])
+        .expect("commit");
+    fs::create_dir_all(f.root().join("left-behind")).expect("mkdir");
+    f.icloud.folders.insert("deleted-here".into());
+    f.icloud.folders.insert("both".into());
+    fs::create_dir_all(f.root().join("both")).expect("mkdir");
+
+    f.run();
+    assert_eq!(
+        f.local_folders(),
+        ["both", "left-behind"],
+        "nothing created"
+    );
+    assert!(!f.icloud.folders.contains("left-behind"));
+    assert!(f.icloud.folders.contains("deleted-here"), "nothing deleted");
+    assert_eq!(
+        f.db.base_folders().expect("read").map(|v| v.len()),
+        Some(1),
+        "only both"
+    );
 }

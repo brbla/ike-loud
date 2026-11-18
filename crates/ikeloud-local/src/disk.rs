@@ -128,6 +128,37 @@ impl LocalDisk {
         }
     }
 
+    /// Creates the folder `path` (and its parents). A file in its place:
+    /// [`DiskError::Changed`].
+    pub fn create_folder(&self, path: &RelPath) -> Result<(), DiskError> {
+        match fs::create_dir_all(self.abs(path)) {
+            Ok(()) => match fs::symlink_metadata(self.abs(path)) {
+                Ok(m) if m.file_type().is_dir() => Ok(()),
+                _ => Err(DiskError::Changed),
+            },
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(DiskError::Changed),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Removes the folder `path` if it is empty (`rmdir`: anything in it,
+    /// hidden or not synced, keeps it: [`DiskError::Changed`]). Already
+    /// gone is fine; a symlink or file there is not touched.
+    pub fn remove_empty_folder(&self, path: &RelPath) -> Result<(), DiskError> {
+        match fs::symlink_metadata(self.abs(path)) {
+            Ok(m) if m.file_type().is_dir() => {}
+            Ok(_) => return Err(DiskError::Changed),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        }
+        match fs::remove_dir(self.abs(path)) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::DirectoryNotEmpty => Err(DiskError::Changed),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Renames or moves the file `id` from `from` to `to`; never over another
     /// file.
     pub fn move_file(&self, from: &RelPath, to: &RelPath, id: LocalId) -> Result<(), DiskError> {

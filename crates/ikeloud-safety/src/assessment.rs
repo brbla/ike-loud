@@ -169,7 +169,7 @@ pub fn assess(plan: Vec<Action>, context: &Context) -> Result<Decision, Rejectio
         }
     }
 
-    check_conflicts(&to_run, &context.remote_etags)?;
+    check_conflicts(&to_run, context)?;
     let confirmed = check_mass_change(&to_run, context)?;
     check_space(&to_run, context)?;
 
@@ -264,7 +264,8 @@ fn case_collisions(
     collisions
 }
 
-fn check_conflicts(actions: &[Action], remote: &BTreeMap<RelPath, Etag>) -> Result<(), Rejection> {
+fn check_conflicts(actions: &[Action], context: &Context) -> Result<(), Rejection> {
+    let remote = &context.remote_etags;
     let mut conflicts = BTreeSet::new();
     for a in actions {
         let matches = match a {
@@ -285,7 +286,15 @@ fn check_conflicts(actions: &[Action], remote: &BTreeMap<RelPath, Etag>) -> Resu
                 to,
                 expected_etag,
             } => remote.get(from) == Some(expected_etag) && !remote.contains_key(to),
-            Action::Download { .. } | Action::TrashLocal { .. } | Action::MoveLocal { .. } => true,
+            Action::TrashRemoteFolder {
+                path,
+                expected_etag,
+            } => context.remote_folder_etags.get(path) == Some(expected_etag),
+            Action::Download { .. }
+            | Action::TrashLocal { .. }
+            | Action::MoveLocal { .. }
+            | Action::CreateLocalFolder { .. }
+            | Action::RemoveLocalFolder { .. } => true,
         };
         if !matches {
             conflicts.insert(a.path().clone());

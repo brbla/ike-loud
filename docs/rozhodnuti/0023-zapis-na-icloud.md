@@ -58,7 +58,7 @@ stranách zároveň: na iCloudu zůstala jeho verze a linuxová je vedle jako
 „… (konflikt Linux 2026-11-17).txt“, nahraná i na iCloud.
 
 Známá mezera: prázdné složky se po smazání nepřenášejí (ani jedním
-směrem); zůstanou prázdné. Obsah to neohrožuje.
+směrem); zůstanou prázdné. Obsah to neohrožuje. *Vyřešeno v 0027.*
 
 Režim démona se rozhoduje po každém běhu: do dokončení prvního stažení
 (značka `first-download-done` ve složce stavu) a bez volby jen čtení.

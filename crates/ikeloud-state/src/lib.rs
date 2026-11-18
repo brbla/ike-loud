@@ -92,11 +92,17 @@ pub enum JournalKind {
     OverwrittenLocal,
     /// The user confirmed a mass change; the brake window starts again.
     MassChangeConfirmed,
+    /// A folder was created locally.
+    FolderCreatedLocal,
+    /// An empty local folder was removed (deleted on iCloud).
+    FolderRemovedLocal,
+    /// An empty folder was moved to the iCloud trash (deleted locally).
+    FolderTrashedRemote,
 }
 
 impl JournalKind {
     /// All kinds (for tests and for the GUI filter).
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 14] = [
         Self::Uploaded,
         Self::Downloaded,
         Self::TrashedRemote,
@@ -108,6 +114,9 @@ impl JournalKind {
         Self::OverwrittenRemote,
         Self::OverwrittenLocal,
         Self::MassChangeConfirmed,
+        Self::FolderCreatedLocal,
+        Self::FolderRemovedLocal,
+        Self::FolderTrashedRemote,
     ];
 
     /// Stable name stored in the database. Never change an existing name.
@@ -124,6 +133,9 @@ impl JournalKind {
             Self::OverwrittenRemote => "overwritten-remote",
             Self::OverwrittenLocal => "overwritten-local",
             Self::MassChangeConfirmed => "mass-change-confirmed",
+            Self::FolderCreatedLocal => "folder-created-local",
+            Self::FolderRemovedLocal => "folder-removed-local",
+            Self::FolderTrashedRemote => "folder-trashed-remote",
         }
     }
 

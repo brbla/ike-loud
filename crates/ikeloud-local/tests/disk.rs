@@ -330,3 +330,40 @@ fn a_download_of_the_same_content_leaves_the_file_alone() {
     assert_eq!(w.read("photo.jpg").as_deref(), Some(&b"other pixels"[..]));
     assert_eq!(w.files_in("history").len(), 1);
 }
+
+#[test]
+fn folders_are_created_and_only_empty_ones_removed() {
+    let w = World::new("folders");
+    w.disk.create_folder(&p("a/b")).expect("create");
+    assert!(w.root().join("a/b").is_dir());
+    w.disk
+        .create_folder(&p("a/b"))
+        .expect("already there is fine");
+    w.write("file", b"x");
+    assert_eq!(
+        w.disk.create_folder(&p("file")),
+        Err(DiskError::Changed),
+        "a file is there"
+    );
+
+    w.write("a/.hidden", b"not synced, still content");
+    assert_eq!(
+        w.disk.remove_empty_folder(&p("a")),
+        Err(DiskError::Changed),
+        "never with anything in it"
+    );
+    w.disk.remove_empty_folder(&p("a/b")).expect("empty");
+    assert!(!w.root().join("a/b").exists());
+    w.disk
+        .remove_empty_folder(&p("a/b"))
+        .expect("already gone is fine");
+    assert_eq!(
+        w.disk.remove_empty_folder(&p("file")),
+        Err(DiskError::Changed),
+        "not a folder"
+    );
+    assert_eq!(
+        w.read("a/.hidden").as_deref(),
+        Some(&b"not synced, still content"[..])
+    );
+}

@@ -54,6 +54,10 @@ impl Rng {
 
 const NAMES: &[&str] = &["a.txt", "b.txt", "c.odt", "d/e.txt", "d/f.txt", "g/h/i.txt"];
 
+/// Folders the user creates and removes (decision 0027), also ones the
+/// files use.
+const FOLDERS: &[&str] = &["d", "g", "g/h", "x", "x/y"];
+
 /// The user: works on the local folder and on iCloud, and knows which
 /// contents they destroyed themselves (edited over, deleted for good).
 struct User {
@@ -118,7 +122,52 @@ impl User {
             .push(format!("user: local {local:?} icloud {remote:?}"));
     }
 
+    /// Creates or removes an empty folder on one side.
+    fn folder_step(&mut self, icloud: &mut FakeICloud) {
+        let folder = (*self.rng.pick(FOLDERS).expect("folders")).to_owned();
+        let inside = format!("{folder}/");
+        match self.rng.below(4) {
+            0 => {
+                let path = self.root.join(&folder);
+                if !path.exists() && !blocked_by_file(&self.root, &format!("{folder}/x")) {
+                    fs::create_dir_all(path).expect("mkdir");
+                }
+            }
+            // Fails unless empty, as rmdir does for a user.
+            1 => {
+                let _ = fs::remove_dir(self.root.join(&folder));
+            }
+            2 => {
+                let file_in_the_way = icloud
+                    .files
+                    .keys()
+                    .any(|k| k == &folder || folder.starts_with(&format!("{k}/")));
+                if !file_in_the_way {
+                    let mut prefix = String::new();
+                    for part in folder.split('/') {
+                        if !prefix.is_empty() {
+                            prefix.push('/');
+                        }
+                        prefix.push_str(part);
+                        icloud.folders.insert(prefix.clone());
+                    }
+                }
+            }
+            _ => {
+                let empty = !icloud.files.keys().any(|k| k.starts_with(&inside))
+                    && !icloud.folders.iter().any(|f| f.starts_with(&inside));
+                if empty {
+                    icloud.folders.remove(&folder);
+                }
+            }
+        }
+    }
+
     fn step_inner(&mut self, icloud: &mut FakeICloud) {
+        if self.rng.below(6) == 0 {
+            self.folder_step(icloud);
+            return;
+        }
         let local = self.local_files();
         let remote: Vec<String> = icloud.files.keys().cloned().collect();
         let name = (*self.rng.pick(NAMES).expect("names")).to_owned();
@@ -216,6 +265,27 @@ fn blocked_by_file(root: &Path, rel: &str) -> bool {
         .ancestors()
         .skip(1)
         .any(|a| !a.as_os_str().is_empty() && root.join(a).is_file())
+}
+
+fn folders_under(base: &Path) -> Vec<String> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+        for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.push(
+                    p.strip_prefix(base)
+                        .expect("under")
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+                walk(&p, base, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(base, base, &mut out);
+    out.sort();
+    out
 }
 
 fn files_under(base: &Path) -> Vec<String> {
@@ -526,6 +596,13 @@ impl World {
                     return Err(format!("{side}: {path} duplicates another file: {files:?}"));
                 }
             }
+        }
+        let local_folders = folders_under(&self.dir.join("root"));
+        let remote_folders: Vec<String> = self.icloud.folders.iter().cloned().collect();
+        if local == remote && local_folders != remote_folders {
+            return Err(format!(
+                "folders did not converge:\n local  {local_folders:?}\n remote {remote_folders:?}"
+            ));
         }
         if local == remote {
             Ok(())

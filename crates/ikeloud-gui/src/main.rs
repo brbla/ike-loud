@@ -1442,6 +1442,9 @@ impl App {
             "overwritten-remote" => "gui-journal-overwritten-remote",
             "overwritten-local" => "gui-journal-overwritten-local",
             "mass-change-confirmed" => "gui-journal-mass-change-confirmed",
+            "folder-created-local" => "gui-journal-folder-created-local",
+            "folder-removed-local" => "gui-journal-folder-removed-local",
+            "folder-trashed-remote" => "gui-journal-folder-trashed-remote",
             _ => return kind.to_string(),
         };
         self.t(key)

@@ -15,6 +15,8 @@ use ikeloud_sync::LocalFile;
 pub struct Scan {
     /// Regular files, in no particular order.
     pub files: Vec<LocalFile>,
+    /// Folders (also empty ones), parents before their children.
+    pub folders: Vec<RelPath>,
     /// Entries that are not synced, with the reason; shown to the user.
     pub skipped: Vec<Skipped>,
     /// How many files were read to hash them (the others were unchanged
@@ -241,6 +243,10 @@ impl Walker<'_> {
             if kind.is_symlink() {
                 self.out.skipped.push(skip(SkipReason::Symlink));
             } else if kind.is_dir() {
+                // A malformed folder name is reported by the files in it.
+                if let Ok(folder) = RelPath::parse(rel_path.as_str()) {
+                    self.out.folders.push(folder);
+                }
                 self.walk(&path, &rel_path)?;
             } else if !kind.is_file() {
                 self.out.skipped.push(skip(SkipReason::Special));
