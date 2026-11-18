@@ -72,6 +72,19 @@ pub enum ApiError {
         /// The server's status text.
         status: String,
     },
+    /// An upload's content reached iCloud, but whether the document was
+    /// created or updated is unknown (no answer, a server error): it may
+    /// appear on iCloud. `checksum` is iCloud's checksum of the content
+    /// (`fileChecksum` of the document's content record), so a later
+    /// listing can tell whether the document there is this upload.
+    UploadUnconfirmed {
+        /// The document written (a new one gets the id of its upload slot).
+        document_id: String,
+        /// iCloud's checksum of the uploaded content.
+        checksum: String,
+        /// What went wrong.
+        cause: Box<ApiError>,
+    },
     /// Unexpected status. The body is not included (it may carry personal data).
     Status {
         /// Which call.
@@ -107,6 +120,7 @@ impl std::fmt::Display for ApiError {
             Self::NameTaken => write!(f, "the name is taken on iCloud"),
             Self::VersionChanged => write!(f, "the item changed on iCloud"),
             Self::Rejected { call, status } => write!(f, "{call}: refused ({status})"),
+            Self::UploadUnconfirmed { cause, .. } => write!(f, "upload not confirmed: {cause}"),
             Self::Status { call, status } => write!(f, "{call}: unexpected status {status}"),
             Self::Malformed { call, what } => write!(f, "{call}: unexpected response: {what}"),
         }

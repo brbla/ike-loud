@@ -7,13 +7,13 @@ use ikeloud_sync::names::key;
 use ikeloud_sync::{BaseEntry, DocId, Transfer};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::{BaseChange, JournalEntry, JournalKind, StateError};
+use crate::{BaseChange, JournalEntry, JournalKind, StateError, UnconfirmedUpload};
 
 /// Schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Migrations: `MIGRATIONS[v]` brings version `v` to `v + 1`.
-const MIGRATIONS: [&str; 2] = [SCHEMA_V1, SCHEMA_V2];
+const MIGRATIONS: [&str; 3] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3];
 
 const SCHEMA_V1: &str = "
 CREATE TABLE base (
@@ -52,6 +52,23 @@ CREATE TABLE pending (
     inode    INTEGER NOT NULL,
     birth_ns INTEGER,
     hash     TEXT NOT NULL CHECK (hash <> '')
+) STRICT;
+";
+
+/// Version 3: uploads whose last step got no answer. The document may be
+/// on iCloud; iCloud's checksum of the content tells a later listing
+/// whether it is (decision 0026).
+const SCHEMA_V3: &str = "
+CREATE TABLE unconfirmed (
+    seq      INTEGER PRIMARY KEY,
+    path     TEXT NOT NULL CHECK (path <> ''),
+    doc_id   TEXT NOT NULL CHECK (doc_id <> ''),
+    device   INTEGER NOT NULL,
+    inode    INTEGER NOT NULL,
+    birth_ns INTEGER,
+    hash     TEXT NOT NULL CHECK (hash <> ''),
+    checksum TEXT NOT NULL CHECK (checksum <> ''),
+    time     INTEGER NOT NULL
 ) STRICT;
 ";
 
@@ -263,6 +280,107 @@ impl StateDb {
             });
         }
         Ok(transfers)
+    }
+
+    /// Remembers an upload whose last step got no answer.
+    pub fn add_unconfirmed(&mut self, upload: &UnconfirmedUpload) -> Result<(), StateError> {
+        self.conn
+            .execute(
+                "INSERT INTO unconfirmed (path, device, inode, birth_ns, hash, checksum, time, doc_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    upload.path.as_str(),
+                    u64_to_sql(upload.local.device),
+                    u64_to_sql(upload.local.inode),
+                    upload.local.birth_ns,
+                    upload.hash.as_str(),
+                    upload.checksum,
+                    i64::try_from(upload.time).unwrap_or(i64::MAX),
+                    upload.doc_id.as_str()
+                ],
+            )
+            .map_err(sql)?;
+        Ok(())
+    }
+
+    /// Uploads whose last step got no answer, oldest first, with their keys
+    /// for [`StateDb::settle_unconfirmed`].
+    pub fn unconfirmed(&self) -> Result<Vec<(i64, UnconfirmedUpload)>, StateError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, path, device, inode, birth_ns, hash, checksum, time, doc_id
+                 FROM unconfirmed ORDER BY seq",
+            )
+            .map_err(sql)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, String>(8)?,
+                ))
+            })
+            .map_err(sql)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, path, device, inode, birth_ns, hash, checksum, time, doc) =
+                row.map_err(sql)?;
+            out.push((
+                seq,
+                UnconfirmedUpload {
+                    path: stored_path("unconfirmed", path)?,
+                    doc_id: DocId::new(doc),
+                    local: LocalId {
+                        device: u64_from_sql(device),
+                        inode: u64_from_sql(inode),
+                        birth_ns,
+                    },
+                    hash: ContentHash::new(hash),
+                    checksum,
+                    time: u64::try_from(time).unwrap_or(0),
+                },
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Settles an unconfirmed upload in one transaction: forgets it and,
+    /// when a listing showed the document with its content, records what
+    /// the upload proved (its journal entry and transfer, as
+    /// [`StateDb::record`] does).
+    pub fn settle_unconfirmed(
+        &mut self,
+        seq: i64,
+        confirmed: Option<(&JournalEntry, &Transfer)>,
+    ) -> Result<(), StateError> {
+        let tx = self.conn.transaction().map_err(sql)?;
+        tx.execute("DELETE FROM unconfirmed WHERE seq = ?1", params![seq])
+            .map_err(sql)?;
+        if let Some((entry, t)) = confirmed {
+            insert_journal(&tx, entry)?;
+            tx.execute(
+                "INSERT INTO pending (doc_id, etag, device, inode, birth_ns, hash, path)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    t.doc_id.as_str(),
+                    t.etag.as_str(),
+                    u64_to_sql(t.local.device),
+                    u64_to_sql(t.local.inode),
+                    t.local.birth_ns,
+                    t.hash.as_str(),
+                    t.path.as_str()
+                ],
+            )
+            .map_err(sql)?;
+        }
+        tx.commit().map_err(sql)
     }
 
     /// The newest `limit` journal entries, newest first.

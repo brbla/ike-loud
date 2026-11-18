@@ -36,6 +36,10 @@ pub struct FakeICloud {
     pub folders: BTreeSet<String>,
     pub trash: Vec<(String, Vec<u8>)>,
     pub offline_after: Option<usize>,
+    /// The next upload is written but its answer is lost (decision 0026).
+    pub lose_upload_answer: bool,
+    /// Whether listings carry content checksums (CloudKit; not the walk).
+    pub no_checksums: bool,
     pub writes: usize,
     next: u64,
 }
@@ -156,6 +160,19 @@ impl Remote for FakeICloud {
                 .iter()
                 .map(|p| RelPath::parse(p.as_str()).expect("path"))
                 .collect(),
+            checksums: if self.no_checksums {
+                BTreeMap::new()
+            } else {
+                self.files
+                    .iter()
+                    .map(|(p, f)| {
+                        (
+                            RelPath::parse(p.as_str()).expect("path"),
+                            checksum(&f.content),
+                        )
+                    })
+                    .collect()
+            },
         })
     }
 
@@ -183,6 +200,36 @@ impl Remote for FakeICloud {
         if let Some(c) = content {
             c.read_to_end(&mut bytes).expect("read local content");
         }
+        let lose_answer = std::mem::take(&mut self.lose_upload_answer)
+            && matches!(
+                action.action(),
+                Action::Upload { .. } | Action::UploadConflictCopy { .. }
+            );
+        let sum = checksum(&bytes);
+        let result = self.write_now(&action, bytes);
+        if lose_answer && let Ok(Some(written)) = &result {
+            return Err(RemoteError::Unconfirmed {
+                doc_id: written.doc_id.clone(),
+                checksum: sum,
+                reason: StopReason::Offline,
+            });
+        }
+        result
+    }
+}
+
+/// The fake's content checksum (iCloud's is SHA-1 based; any content hash
+/// will do here).
+pub fn checksum(content: &[u8]) -> String {
+    format!("AQ{}", ikeloud_hash::hex(&ikeloud_hash::sha256(&[content])))
+}
+
+impl FakeICloud {
+    fn write_now(
+        &mut self,
+        action: &ApprovedAction,
+        bytes: Vec<u8>,
+    ) -> Result<Option<Written>, RemoteError> {
         match action.action() {
             Action::Upload {
                 remote,

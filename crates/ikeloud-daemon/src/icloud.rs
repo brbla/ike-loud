@@ -144,6 +144,15 @@ impl<T: Transport + Clone> ICloudRemote<T> {
 /// A refused write wrote nothing: the plan no longer fits.
 fn write_error(error: &ApiError) -> RemoteError {
     match error {
+        ApiError::UploadUnconfirmed {
+            document_id,
+            checksum,
+            cause,
+        } => RemoteError::Unconfirmed {
+            doc_id: DocId::new(document_id.clone()),
+            checksum: checksum.clone(),
+            reason: stop_reason(cause),
+        },
         ApiError::NameTaken | ApiError::VersionChanged | ApiError::Rejected { .. } => {
             RemoteError::Changed
         }
@@ -347,8 +356,28 @@ impl<T: Transport> Core<T> {
     }
 }
 
+/// `text` with every address replaced: one could carry the account id.
+fn without_addresses(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            if word.contains("://") {
+                "<address>"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// What a failed call means for the run.
 pub fn stop_reason(error: &ApiError) -> StopReason {
+    // For the service's journal (journalctl --user -u ikeloud): why a run
+    // stopped. The texts carry no personal data (see ApiError).
+    #[allow(clippy::print_stderr)]
+    {
+        eprintln!("iCloud: {}", without_addresses(&error.to_string()));
+    }
     match error {
         // "Try again later" (503 RETRY when too many writes at once, 429,
         // a gateway in between): like an outage, the run retries later with
@@ -374,6 +403,7 @@ pub fn stop_reason(error: &ApiError) -> StopReason {
         ApiError::NameTaken | ApiError::VersionChanged | ApiError::Rejected { .. } => {
             StopReason::UnknownResponse
         }
+        ApiError::UploadUnconfirmed { cause, .. } => stop_reason(cause),
     }
 }
 
@@ -658,5 +688,11 @@ mod tests {
             status: 500,
         };
         assert_eq!(stop_reason(&e), StopReason::UnknownResponse);
+        assert_eq!(
+            without_addresses(
+                "network error: https://p1-ckdatabasews.icloud.com/x?dsid=1 timed out"
+            ),
+            "network error: <address> timed out"
+        );
     }
 }

@@ -450,3 +450,41 @@ fn recorded_actions_survive_until_the_commit() {
         "the commit clears them"
     );
 }
+
+#[test]
+fn unconfirmed_uploads_settle_into_pending_transfers() {
+    use ikeloud_state::UnconfirmedUpload;
+    let dir = TempDir::new("unconfirmed");
+    let upload = |path: &str, checksum: &str| UnconfirmedUpload {
+        path: RelPath::parse(path).expect("path"),
+        doc_id: ikeloud_sync::DocId::new(format!("doc-{path}")),
+        local: transfer(path, "d", "e", 7, "h").local,
+        hash: transfer(path, "d", "e", 7, "h").hash,
+        checksum: checksum.to_string(),
+        time: 100,
+    };
+    {
+        let mut db = StateDb::open(&dir.db()).expect("create");
+        db.add_unconfirmed(&upload("a", "AQ1")).expect("add");
+        db.add_unconfirmed(&upload("b", "AQ2")).expect("add");
+    }
+    let mut db = StateDb::open(&dir.db()).expect("reopen");
+    let found = db.unconfirmed().expect("read");
+    assert_eq!(
+        found.iter().map(|(_, u)| u.clone()).collect::<Vec<_>>(),
+        vec![upload("a", "AQ1"), upload("b", "AQ2")],
+        "kept across restarts"
+    );
+    let (a, b) = (found[0].0, found[1].0);
+    // a: the listing shows it; b: it never reached iCloud.
+    let proved = transfer("a", "d1", "e1", 7, "h");
+    db.settle_unconfirmed(
+        a,
+        Some((&log(5, JournalKind::Uploaded, "a", None), &proved)),
+    )
+    .expect("settle");
+    db.settle_unconfirmed(b, None).expect("settle");
+    assert!(db.unconfirmed().expect("read").is_empty());
+    assert_eq!(db.pending().expect("pending"), vec![proved]);
+    assert_eq!(db.journal(10).expect("journal").len(), 1);
+}

@@ -10,7 +10,7 @@
 
 mod db;
 
-use ikeloud_safety::RelPath;
+use ikeloud_safety::{ContentHash, LocalId, RelPath};
 use ikeloud_sync::{BaseEntry, DocId};
 
 pub use db::{SCHEMA_VERSION, StateDb};
@@ -131,6 +131,23 @@ impl JournalKind {
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|k| k.name() == name)
     }
+}
+
+/// An upload whose last step got no answer: the document may be on iCloud.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnconfirmedUpload {
+    /// Where on iCloud (the path the upload went to).
+    pub path: RelPath,
+    /// The document written.
+    pub doc_id: DocId,
+    /// The local file uploaded.
+    pub local: LocalId,
+    /// Hash of the content uploaded.
+    pub hash: ContentHash,
+    /// iCloud's checksum of that content.
+    pub checksum: String,
+    /// When (Unix seconds).
+    pub time: u64,
 }
 
 /// One entry of the journal: what happened, when and to which file.
