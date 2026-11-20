@@ -154,6 +154,8 @@ fn all_messages() -> Vec<Message> {
         "gui-journal-overwritten-local",
         "gui-journal-mass-change-confirmed",
         "gui-notify-conflict-title",
+        "gui-journal-check-differs",
+        "gui-notify-differs-title",
         "gui-confirm-changes",
         "gui-confirm-sent",
         "gui-kind-trash-remote",
@@ -197,7 +199,19 @@ fn all_messages() -> Vec<Message> {
                 .arg("name", Value::Text("a.txt".into()))
                 .arg("count", Value::Number(count)),
         );
+        messages.push(Message::new("gui-check-differs").arg("count", Value::Number(count)));
+        messages.push(
+            Message::new("gui-notify-differs")
+                .arg("name", Value::Text("a.txt".into()))
+                .arg("count", Value::Number(count)),
+        );
     }
+    messages.push(
+        Message::new("gui-check-progress")
+            .arg("current", Value::Number(3))
+            .arg("files", Value::Number(5)),
+    );
+    messages.push(Message::new("gui-check-ok").arg("files", Value::Number(5)));
     messages.push(Message::new("gui-folder-trash-failed").arg("detail", Value::Text("x".into())));
     messages.push(Message::new("gui-change-body").arg("folder", Value::Text("/x".into())));
     messages.push(Message::new("gui-change-old").arg("old", Value::Text("/y".into())));

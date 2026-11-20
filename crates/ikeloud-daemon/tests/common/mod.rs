@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use ikeloud_daemon::{
-    Download, Listing, Remote, RemoteError, RunOutcome, RunReport, SyncSetup, Written, sync_once,
+    CheckLimits, CheckReport, Download, Listing, Remote, RemoteError, RunOutcome, RunReport,
+    SyncSetup, Written, check_part, sync_once,
 };
 use ikeloud_local::{HashCache, LocalDisk};
 use ikeloud_safety::{
@@ -63,6 +64,12 @@ impl FakeICloud {
         let f = self.files.get_mut(path).expect("exists");
         f.content = content.to_vec();
         f.etag = etag;
+    }
+
+    /// The content changes, the version does not: what the check run is
+    /// there to find (a broken upload, a fault on iCloud's side).
+    pub fn corrupt(&mut self, path: &str, content: &[u8]) {
+        self.files.get_mut(path).expect("exists").content = content.to_vec();
     }
 
     pub fn delete(&mut self, path: &str) {
@@ -233,10 +240,12 @@ pub fn folder_etag(path: &str) -> Etag {
     Etag::new(format!("folder:{path}"))
 }
 
-/// The fake's content checksum (iCloud's is SHA-1 based; any content hash
-/// will do here).
-pub fn checksum(content: &[u8]) -> String {
-    format!("AQ{}", ikeloud_hash::hex(&ikeloud_hash::sha256(&[content])))
+/// The fake's content checksum: iCloud's (decision 0028), so the check
+/// run compares local files with it as with the real one.
+pub fn checksum(mut content: &[u8]) -> String {
+    ikeloud_hash::content_sums(&mut content)
+        .expect("in memory")
+        .1
 }
 
 impl FakeICloud {
@@ -450,6 +459,16 @@ impl Fixture {
         drop(remote);
         self.icloud = std::mem::take(&mut *shared.0.lock().expect("lock"));
         outcome
+    }
+
+    /// One part of the check run against the local folder.
+    pub fn check(&mut self, limits: CheckLimits) -> CheckReport {
+        let disk = LocalDisk::new(
+            self.root(),
+            self.dir.join("trash"),
+            self.dir.join("history"),
+        );
+        check_part(&disk, &mut self.db, SystemTime::now(), limits).expect("state db")
     }
 
     pub fn run(&mut self) -> RunReport {

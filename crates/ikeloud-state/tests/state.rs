@@ -338,7 +338,8 @@ fn journal_kind_names_are_stable() {
             "mass-change-confirmed",
             "folder-created-local",
             "folder-removed-local",
-            "folder-trashed-remote"
+            "folder-trashed-remote",
+            "check-differs"
         ]
     );
     for k in JournalKind::ALL {
@@ -545,4 +546,67 @@ fn remote_checksums_are_replaced_as_a_whole() {
     sums.remove(&doc("d1"));
     db.set_remote_checksums(&sums).expect("set");
     assert_eq!(db.remote_checksums().expect("read"), sums);
+}
+
+fn verified(doc: &str, etag: &str, hash: &str, time: u64, same: bool) -> ikeloud_state::Verified {
+    ikeloud_state::Verified {
+        doc_id: DocId::new(doc),
+        etag: ikeloud_safety::Etag::new(etag),
+        hash: ikeloud_safety::ContentHash::new(hash),
+        time,
+        same,
+    }
+}
+
+#[test]
+fn check_results_are_stored_replaced_and_forgotten() {
+    let dir = TempDir::new("verified");
+    {
+        let mut db = StateDb::open(&dir.db()).expect("open");
+        assert!(db.verified().expect("read").is_empty());
+        db.store_check(
+            &[
+                verified("d1", "e1", "h1", 10, true),
+                verified("d2", "e2", "h2", 10, false),
+            ],
+            &[],
+            &[log(10, JournalKind::CheckDiffers, "b.txt", None)],
+        )
+        .expect("store");
+        db.store_check(
+            &[verified("d1", "e3", "h3", 20, false)],
+            &[DocId::new("d2")],
+            &[],
+        )
+        .expect("store");
+    }
+    // Survives a restart.
+    let db = StateDb::open(&dir.db()).expect("open again");
+    let found = db.verified().expect("read");
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        found.get(&DocId::new("d1")),
+        Some(&verified("d1", "e3", "h3", 20, false))
+    );
+    let journal = db.journal(10).expect("journal");
+    assert_eq!(
+        journal,
+        vec![log(10, JournalKind::CheckDiffers, "b.txt", None)]
+    );
+}
+
+#[test]
+fn a_check_result_with_an_empty_value_stores_nothing() {
+    let mut db = StateDb::open_in_memory().expect("open");
+    let result = db.store_check(
+        &[
+            verified("d1", "e1", "h1", 10, true),
+            verified("d2", "", "h2", 10, true),
+        ],
+        &[],
+        &[log(10, JournalKind::CheckDiffers, "b.txt", None)],
+    );
+    assert_eq!(result, Err(StateError::InvalidValue { field: "verified" }));
+    assert!(db.verified().expect("read").is_empty(), "rolled back");
+    assert!(db.journal(10).expect("journal").is_empty(), "rolled back");
 }

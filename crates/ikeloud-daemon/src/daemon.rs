@@ -10,6 +10,7 @@ use ikeloud_local::{Coverage, HashCache, Hint, Purged, Watcher, Watches};
 use ikeloud_safety::{DeferReason, MassChangeConfirmation, Rejection};
 use ikeloud_state::{StateDb, StateError};
 
+use crate::check::{CheckLimits, CheckReport, check_part};
 use crate::remote::Remote;
 use crate::run::{RunOutcome, SyncSetup, sync_once};
 use crate::schedule::{RunResult, Schedule, Timing};
@@ -41,6 +42,9 @@ pub struct Status {
     /// The local history purge, if this run did the daily upkeep (the
     /// error: the history folder could not be read).
     pub history: Option<Result<Purged, std::io::ErrorKind>>,
+    /// The part of the check run done after this run (only after a quiet
+    /// run, decision 0028).
+    pub check: Option<Result<CheckReport, StateError>>,
 }
 
 /// Starts a thread that turns inotify events of the synced folder `root` into
@@ -83,6 +87,7 @@ pub struct Daemon<'a> {
     /// When the daily upkeep was last done.
     upkept: Option<Instant>,
     confirmation: Option<MassChangeConfirmation>,
+    check: CheckLimits,
 }
 
 impl<'a> Daemon<'a> {
@@ -105,7 +110,15 @@ impl<'a> Daemon<'a> {
             schedule: Schedule::new(timing, now),
             upkept: None,
             confirmation: None,
+            check: CheckLimits::DEFAULT,
         }
+    }
+
+    /// The same daemon with other limits for the check run.
+    #[must_use]
+    pub fn with_check(mut self, limits: CheckLimits) -> Self {
+        self.check = limits;
+        self
     }
 
     /// Runs until [`Event::Stop`] or until every sender of `events` is gone.
@@ -185,13 +198,25 @@ impl<'a> Daemon<'a> {
         if matches!(&outcome, Ok(RunOutcome::Ran(r)) if r.executed.stopped.is_none()) {
             self.confirmation = None;
         }
-        self.schedule
-            .ran(started, Instant::now(), classify(&outcome));
+        let result = classify(&outcome);
+        // Only after a quiet run: both sides were just compared and nothing
+        // is waiting. The next run waits for the part (seconds at most).
+        let check =
+            (result == RunResult::Idle && matches!(&outcome, Ok(RunOutcome::Ran(_)))).then(|| {
+                check_part(
+                    &self.setup.disk,
+                    &mut self.db,
+                    SystemTime::now(),
+                    self.check,
+                )
+            });
+        self.schedule.ran(started, Instant::now(), result);
         Status {
             outcome,
             coverage,
             failures: self.schedule.failures(),
             history,
+            check,
         }
     }
 }

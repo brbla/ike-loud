@@ -463,6 +463,11 @@ version = "1.1.3"
 criteria = "safe-to-deploy"
 notes = "GUI (ikeloud-gui), 2026-11-17: GTK 4 and libadwaita bindings (gtk-rs) and their build helpers. Not audited yet; we trust nobody (docs/rozhodnuti/0007, 0022)."
 
+[[exemptions.sha1]]
+version = "0.11.0"
+criteria = "safe-to-deploy"
+notes = "Kontrolní běh (ikeloud-hash, rozhodnutí 0028), 2026-11-19: kontrolní součet obsahu, jak ho počítá iCloud. RustCrypto, stejná rodina a závislosti jako sha2; přečtený rozdíl (no_std, unsafe jen u instrukcí CPU po kontrole). Vlastní audit čeká jako u sha2 (docs/rozhodnuti/0005)."
+
 [[exemptions.sha2]]
 version = "0.11.0"
 criteria = "safe-to-deploy"

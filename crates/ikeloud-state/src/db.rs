@@ -8,13 +8,15 @@ use ikeloud_sync::names::key;
 use ikeloud_sync::{BaseEntry, DocId, Transfer};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::{BaseChange, JournalEntry, JournalKind, StateError, UnconfirmedUpload};
+use crate::{BaseChange, JournalEntry, JournalKind, StateError, UnconfirmedUpload, Verified};
 
 /// Schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// Migrations: `MIGRATIONS[v]` brings version `v` to `v + 1`.
-const MIGRATIONS: [&str; 5] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5];
+const MIGRATIONS: [&str; 6] = [
+    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
+];
 
 const SCHEMA_V1: &str = "
 CREATE TABLE base (
@@ -100,6 +102,18 @@ CREATE TABLE remote_checksums (
     doc_id   TEXT PRIMARY KEY NOT NULL CHECK (doc_id <> ''),
     etag     TEXT NOT NULL CHECK (etag <> ''),
     checksum TEXT NOT NULL CHECK (checksum <> '')
+) STRICT;
+";
+
+/// Version 6: what the check run found per document (decision 0028).
+/// `same` = 1: the local content had iCloud's checksum.
+const SCHEMA_V6: &str = "
+CREATE TABLE verified (
+    doc_id TEXT PRIMARY KEY NOT NULL CHECK (doc_id <> ''),
+    etag   TEXT NOT NULL CHECK (etag <> ''),
+    hash   TEXT NOT NULL CHECK (hash <> ''),
+    time   INTEGER NOT NULL CHECK (time >= 0),
+    same   INTEGER NOT NULL CHECK (same IN (0, 1))
 ) STRICT;
 ";
 
@@ -415,6 +429,90 @@ impl StateDb {
                 params![doc.as_str(), etag.as_str(), checksum],
             )
             .map_err(sql)?;
+        }
+        tx.commit().map_err(sql)
+    }
+
+    /// What the check run found, per document.
+    pub fn verified(&self) -> Result<BTreeMap<DocId, Verified>, StateError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT doc_id, etag, hash, time, same FROM verified")
+            .map_err(sql)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            })
+            .map_err(sql)?;
+        let mut out = BTreeMap::new();
+        for row in rows {
+            let (doc, etag, hash, time, same) = row.map_err(sql)?;
+            let doc_id = DocId::new(doc);
+            out.insert(
+                doc_id.clone(),
+                Verified {
+                    doc_id,
+                    etag: Etag::new(etag),
+                    hash: ContentHash::new(hash),
+                    time: u64::try_from(time).map_err(|_| StateError::CorruptRow {
+                        table: "verified",
+                        detail: format!("time {time}"),
+                    })?,
+                    same: same != 0,
+                },
+            );
+        }
+        Ok(out)
+    }
+
+    /// Stores what one part of the check run found, in one transaction:
+    /// the results (replacing earlier ones of the same documents), the
+    /// documents to forget (gone from the common state) and the journal
+    /// entries of new findings.
+    pub fn store_check(
+        &mut self,
+        results: &[Verified],
+        forget: &[DocId],
+        journal: &[JournalEntry],
+    ) -> Result<(), StateError> {
+        let tx = self.conn.transaction().map_err(sql)?;
+        for v in results {
+            if v.doc_id.as_str().is_empty()
+                || v.etag.as_str().is_empty()
+                || v.hash.as_str().is_empty()
+            {
+                return Err(StateError::InvalidValue { field: "verified" });
+            }
+            let time =
+                i64::try_from(v.time).map_err(|_| StateError::InvalidValue { field: "time" })?;
+            tx.execute(
+                "INSERT OR REPLACE INTO verified (doc_id, etag, hash, time, same)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    v.doc_id.as_str(),
+                    v.etag.as_str(),
+                    v.hash.as_str(),
+                    time,
+                    i64::from(v.same)
+                ],
+            )
+            .map_err(sql)?;
+        }
+        for doc in forget {
+            tx.execute(
+                "DELETE FROM verified WHERE doc_id = ?1",
+                params![doc.as_str()],
+            )
+            .map_err(sql)?;
+        }
+        for entry in journal {
+            insert_journal(&tx, entry)?;
         }
         tx.commit().map_err(sql)
     }
@@ -777,6 +875,7 @@ mod tests {
             "a database with data from before records folders first"
         );
         assert!(db.remote_checksums().expect("checksums").is_empty());
+        assert!(db.verified().expect("verified").is_empty());
         let v: i64 = db
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))

@@ -155,6 +155,8 @@ fn main() -> ExitCode {
     );
     let counts = Cell::new((0u64, 0u64));
     let uploaded = Cell::new(0u64);
+    // The check run: (files, current, differing) after its last part.
+    let checked = Cell::new((0u64, 0u64, 0u64));
     // Local changes the last run deferred (read-only: never uploaded).
     let pending = Cell::new(0u64);
     let mut remote = Reporting {
@@ -210,6 +212,19 @@ fn main() -> ExitCode {
                 .collect();
             let _ = save_journal(&journal_path, &lines);
         }
+        match &status.check {
+            Some(Ok(report)) => {
+                checked.set((report.checkable, report.current, report.differing));
+                for path in &report.found {
+                    log_warning(&format!(
+                        "check: the content differs on the disk and on iCloud: {}",
+                        path.as_str()
+                    ));
+                }
+            }
+            Some(Err(e)) => log_warning(&format!("check: state database: {e:?}")),
+            None => {}
+        }
         mode.set(sync_mode(
             Settings::load(&settings_path)
                 .map(|s| s.upload)
@@ -221,6 +236,7 @@ fn main() -> ExitCode {
         file.local_pending = pending.get();
         file.uploaded = uploaded.get();
         file.writes = mode.get() == Mode::Full;
+        (file.check_files, file.check_current, file.check_differing) = checked.get();
         let _ = file.save(&status_path);
     };
     // The loop ends when every event sender is gone; the watcher keeps one.
@@ -442,5 +458,13 @@ impl<R: Remote> Remote for Reporting<'_, R> {
     fn uploaded_elsewhere(&mut self, path: &RelPath) {
         self.uploaded.set(self.uploaded.get().saturating_add(1));
         self.save(path.as_str());
+    }
+}
+
+/// One line to the service log (the journal of systemd).
+fn log_warning(line: &str) {
+    #[allow(clippy::print_stderr)]
+    {
+        eprintln!("{line}");
     }
 }

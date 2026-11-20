@@ -10,7 +10,7 @@
 
 mod db;
 
-use ikeloud_safety::{ContentHash, LocalId, RelPath};
+use ikeloud_safety::{ContentHash, Etag, LocalId, RelPath};
 use ikeloud_sync::{BaseEntry, DocId};
 
 pub use db::{SCHEMA_VERSION, StateDb};
@@ -98,11 +98,15 @@ pub enum JournalKind {
     FolderRemovedLocal,
     /// An empty folder was moved to the iCloud trash (deleted locally).
     FolderTrashedRemote,
+    /// The check run found a file whose content differs between the disk
+    /// and iCloud, though both are at the version of the common state
+    /// (decision 0028). Nothing was changed.
+    CheckDiffers,
 }
 
 impl JournalKind {
     /// All kinds (for tests and for the GUI filter).
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Uploaded,
         Self::Downloaded,
         Self::TrashedRemote,
@@ -117,6 +121,7 @@ impl JournalKind {
         Self::FolderCreatedLocal,
         Self::FolderRemovedLocal,
         Self::FolderTrashedRemote,
+        Self::CheckDiffers,
     ];
 
     /// Stable name stored in the database. Never change an existing name.
@@ -136,6 +141,7 @@ impl JournalKind {
             Self::FolderCreatedLocal => "folder-created-local",
             Self::FolderRemovedLocal => "folder-removed-local",
             Self::FolderTrashedRemote => "folder-trashed-remote",
+            Self::CheckDiffers => "check-differs",
         }
     }
 
@@ -160,6 +166,24 @@ pub struct UnconfirmedUpload {
     pub checksum: String,
     /// When (Unix seconds).
     pub time: u64,
+}
+
+/// What the check run found for one document (decision 0028): at the
+/// version `etag` on iCloud and the content `hash` on the disk, iCloud's
+/// checksum and the local content were the same, or not. Holds only while
+/// the common state still has that version and content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Verified {
+    /// The document.
+    pub doc_id: DocId,
+    /// Its version on iCloud when checked.
+    pub etag: Etag,
+    /// The content hash of the local file when checked.
+    pub hash: ContentHash,
+    /// When (Unix seconds).
+    pub time: u64,
+    /// Whether both sides had the same content.
+    pub same: bool,
 }
 
 /// One entry of the journal: what happened, when and to which file.

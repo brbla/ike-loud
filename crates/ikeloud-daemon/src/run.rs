@@ -535,7 +535,8 @@ fn recent_changes(db: &StateDb, now: SystemTime) -> Result<RecentChanges, StateE
             | JournalKind::Downloaded
             | JournalKind::ConflictCopy
             | JournalKind::FolderCreated
-            | JournalKind::FolderCreatedLocal => {}
+            | JournalKind::FolderCreatedLocal
+            | JournalKind::CheckDiffers => {}
         }
     }
     Ok(recent)

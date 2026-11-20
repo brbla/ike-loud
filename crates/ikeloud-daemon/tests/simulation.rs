@@ -28,7 +28,8 @@ use std::time::{Duration, SystemTime};
 
 use common::{FakeICloud, copy_name};
 use ikeloud_daemon::{
-    Download, Listing, Remote, RemoteError, RunOutcome, Started, SyncSetup, Written, start_run,
+    CheckLimits, Download, Listing, Remote, RemoteError, RunOutcome, Started, SyncSetup, Written,
+    check_part, start_run,
 };
 use ikeloud_local::{HashCache, LocalDisk};
 use ikeloud_safety::{ApprovedAction, DEFAULT_SETTLE_TIME, Rejection, RelPath};
@@ -625,6 +626,35 @@ impl World {
     }
 }
 
+impl World {
+    /// Once both sides agree, the check run (decision 0028) must find every
+    /// file the same on the disk and on iCloud, and (with CloudKit's
+    /// checksums) be able to check every file.
+    fn check_clean(&mut self) -> Result<(), String> {
+        let disk = LocalDisk::new(
+            self.dir.join("root"),
+            self.dir.join("trash"),
+            self.dir.join("history"),
+        );
+        let limits = CheckLimits {
+            every: Duration::ZERO,
+            bytes: u64::MAX,
+            time: Duration::from_secs(3600),
+        };
+        let report = check_part(&disk, &mut self.db, SystemTime::now(), limits).expect("state db");
+        if report.differing != 0 || !report.found.is_empty() {
+            return Err(format!("the check found differences: {report:?}"));
+        }
+        let files = u64::try_from(self.icloud.files.len()).unwrap_or(u64::MAX);
+        if !self.walk_only && (report.checkable != files || report.checked != files) {
+            return Err(format!(
+                "the check could not check every file ({files}): {report:?}"
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl Drop for World {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.dir);
@@ -649,6 +679,7 @@ fn simulate(world: &mut World) -> Result<(), String> {
             None => return Ok(()),
             Some(0) => {
                 world.in_sync()?;
+                world.check_clean()?;
                 if world.checked_run(false)? != Some(0) {
                     return Err("converged, but the next run did something".into());
                 }
