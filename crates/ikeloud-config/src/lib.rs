@@ -196,6 +196,13 @@ pub struct Status {
     pub writes: bool,
     /// Files uploaded since the daemon started.
     pub uploaded: u64,
+    /// Check run (decision 0028): files that can be checked.
+    pub check_files: u64,
+    /// Of those, files checked in the last week.
+    pub check_current: u64,
+    /// Of the checked ones, files whose content differs on the disk and on
+    /// iCloud.
+    pub check_differing: u64,
     /// Seconds since 1970 of the last write of the status.
     pub updated: u64,
     /// Process id of the daemon that wrote it.
@@ -218,6 +225,9 @@ impl Status {
             local_pending: 0,
             writes: false,
             uploaded: 0,
+            check_files: 0,
+            check_current: 0,
+            check_differing: 0,
             updated: unix_now(),
             pid: std::process::id(),
         }
@@ -226,7 +236,7 @@ impl Status {
     /// Writes the status file.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         let text = format!(
-            "state={}\ndetail={}\nremote_files={}\ndownloaded={}\nlocal_pending={}\nwrites={}\nuploaded={}\nupdated={}\npid={}\n",
+            "state={}\ndetail={}\nremote_files={}\ndownloaded={}\nlocal_pending={}\nwrites={}\nuploaded={}\ncheck_files={}\ncheck_current={}\ncheck_differing={}\nupdated={}\npid={}\n",
             self.state.name(),
             self.detail.replace(['\n', '\r'], " "),
             self.remote_files,
@@ -234,6 +244,9 @@ impl Status {
             self.local_pending,
             u8::from(self.writes),
             self.uploaded,
+            self.check_files,
+            self.check_current,
+            self.check_differing,
             self.updated,
             self.pid
         );
@@ -256,6 +269,9 @@ impl Status {
             local_pending: number("local_pending"),
             writes: number("writes") == 1,
             uploaded: number("uploaded"),
+            check_files: number("check_files"),
+            check_current: number("check_current"),
+            check_differing: number("check_differing"),
             updated: number("updated"),
             pid: map.get("pid").and_then(|v| v.parse().ok()).unwrap_or(0),
         })
@@ -583,6 +599,9 @@ mod tests {
         status.local_pending = 4;
         status.writes = true;
         status.uploaded = 9;
+        status.check_files = 20;
+        status.check_current = 15;
+        status.check_differing = 1;
         status.save(&path).unwrap();
         let read = Status::load(&path).unwrap();
         assert_eq!(read, status);

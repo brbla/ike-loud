@@ -189,6 +189,21 @@ gui-journal-folder-trashed-remote = Prázdná složka přesunuta do koše iCloud
 gui-journal-overwritten-remote = Nová verze na iCloudu
 gui-journal-overwritten-local = Nová verze v počítači (stará v historii)
 gui-journal-mass-change-confirmed = Potvrzena hromadná změna
+gui-journal-check-differs = Obsah v počítači se liší od iCloudu (nic se nezměnilo)
+gui-check-progress = Kontrola obsahu: ověřeno { $current } z { $files } souborů, vše sedí.
+gui-check-ok = Kontrola obsahu: všech { $files } souborů v počítači odpovídá iCloudu.
+gui-check-differs =
+    { $count ->
+        [one] U 1 souboru se obsah v počítači liší od iCloudu, ačkoli obě strany vypadají beze změny. Nic se nepřepsalo; soubor je v deníku.
+        [few] U { $count } souborů se obsah v počítači liší od iCloudu, ačkoli obě strany vypadají beze změny. Nic se nepřepsalo; soubory jsou v deníku.
+       *[other] U { $count } souborů se obsah v počítači liší od iCloudu, ačkoli obě strany vypadají beze změny. Nic se nepřepsalo; soubory jsou v deníku.
+    }
+gui-notify-differs-title = ike loud: obsah se liší
+gui-notify-differs =
+    { $count ->
+        [one] { $name }: v počítači je jiný obsah než na iCloudu, ačkoli se soubor nikde nezměnil. Nic se nepřepsalo. Porovnejte obě verze a tu správnou uložte znovu.
+       *[other] { $count } souborů (např. { $name }) má v počítači jiný obsah než na iCloudu, ačkoli se nikde nezměnily. Nic se nepřepsalo. Porovnejte obě verze a ty správné uložte znovu.
+    }
 gui-notify-conflict-title = ike loud: zachovány obě verze
 gui-notify-conflict =
     { $count ->

@@ -183,6 +183,20 @@ gui-journal-folder-removed-local = Empty folder removed from this computer
 gui-journal-folder-trashed-remote = Empty folder moved to the iCloud trash
 gui-journal-overwritten-remote = New version on iCloud
 gui-journal-overwritten-local = New version on this computer (the old one in history)
+gui-journal-check-differs = Content on this computer differs from iCloud (nothing changed)
+gui-check-progress = Content check: { $current } of { $files } files checked, all match.
+gui-check-ok = Content check: all { $files } files on this computer match iCloud.
+gui-check-differs =
+    { $count ->
+        [one] 1 file has different content on this computer and on iCloud, though neither side looks changed. Nothing was overwritten; the file is in the journal.
+       *[other] { $count } files have different content on this computer and on iCloud, though neither side looks changed. Nothing was overwritten; the files are in the journal.
+    }
+gui-notify-differs-title = ike loud: content differs
+gui-notify-differs =
+    { $count ->
+        [one] { $name }: the content on this computer is not the one on iCloud, though the file did not change anywhere. Nothing was overwritten. Compare both versions and save the right one again.
+       *[other] { $count } files (e.g. { $name }) have other content on this computer than on iCloud, though they did not change anywhere. Nothing was overwritten. Compare both versions and save the right ones again.
+    }
 gui-journal-mass-change-confirmed = Mass change confirmed
 gui-notify-conflict-title = ike loud: both versions kept
 gui-notify-conflict =

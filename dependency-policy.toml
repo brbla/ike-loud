@@ -65,11 +65,12 @@ internal = ["ikeloud-safety", "ikeloud-sync"]
 external = ["rusqlite"]
 dev = ["ikeloud-testkit"]
 
-# Hash functions: single wrapper of sha2 and pbkdf2, used by the sign-in
-# (ikeloud-api) and the local scanner (content hashes).
+# Hash functions: single wrapper of sha2, sha1 and pbkdf2, used by the
+# sign-in (ikeloud-api), the local scanner (content hashes) and the check
+# run (sha1: iCloud's content checksum, decision 0028).
 [crates.ikeloud-hash]
 internal = []
-external = ["sha2", "pbkdf2"]
+external = ["sha2", "sha1", "pbkdf2"]
 dev = []
 
 # The local side: scanning and watching the synced folder. Content hashes

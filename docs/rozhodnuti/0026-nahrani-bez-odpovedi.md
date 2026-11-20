@@ -21,7 +21,8 @@ kontrolního součtu nelze obsah porovnat) udělá konfliktní kopii.
 - Odpověď kroku 2 nese `singleFile.fileChecksum`; CloudKit má u záznamu
   obsahu totéž pole (`fileContent.value.fileChecksum`). Pro obsah známé
   fotky shodné (`AQxS5l6Q…`), bez soli: stejný obsah dává stejný součet.
-  Není to prostý SHA-1 ani SHA-256 souboru.
+  Není to prostý SHA-1 ani SHA-256 souboru (později zjištěno: SHA-1 s
+  pevnou předponou, rozhodnutí 0028).
 - `document_id` ze slotu je i ID výsledného dokumentu (ve výpisu i v
   CloudKitu).
 

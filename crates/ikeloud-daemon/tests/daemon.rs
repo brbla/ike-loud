@@ -57,6 +57,9 @@ struct Seen {
     failures: u32,
     /// History versions purged, on runs that did the daily upkeep.
     purged: Option<usize>,
+    /// Files compared by the check run after this run (only quiet runs)
+    /// and how many of all checked files differ.
+    checked: Option<(u64, u64)>,
 }
 
 fn seen(s: &Status) -> Seen {
@@ -69,6 +72,10 @@ fn seen(s: &Status) -> Seen {
         ok,
         failures: s.failures,
         purged: s.history.map(|h| h.expect("history readable").removed),
+        checked: s.check.as_ref().map(|c| {
+            let c = c.as_ref().expect("state db");
+            (c.checked, c.differing)
+        }),
     }
 }
 
@@ -159,6 +166,19 @@ impl Running {
         }
     }
 
+    /// Runs until one after which the check ran (a quiet run; a run right
+    /// after a download sees the new file still settling).
+    fn until_checked(&self) -> Vec<Seen> {
+        let mut runs = vec![];
+        loop {
+            let s = self.next_run();
+            runs.push(s);
+            if s.checked.is_some() {
+                return runs;
+            }
+        }
+    }
+
     fn stop(self) -> FakeICloud {
         self.events.send(Event::Stop).expect("daemon alive");
         self.thread.join().expect("daemon thread");
@@ -214,4 +234,44 @@ fn an_unreachable_server_is_retried_with_growing_waits() {
     let runs = d.until_idle();
     assert_eq!(runs.last().map(|s| s.failures), Some(0), "{runs:?}");
     assert!(d.stop().content("a.txt").is_some());
+}
+
+#[test]
+fn quiet_runs_check_the_synced_files() {
+    let d = Running::start("loop-check", true, false);
+    d.icloud.with(|i| i.put("from-iphone.txt", b"i"));
+    let first = d.until_checked();
+    assert!(
+        first.iter().all(|s| s.checked.is_none() || s.done == 0),
+        "no check after a run that did something: {first:?}"
+    );
+    assert_eq!(
+        first.last().and_then(|s| s.checked),
+        Some((1, 0)),
+        "{first:?}"
+    );
+
+    d.write("from-linux.txt", b"l");
+    let runs = d.until_checked();
+    assert_eq!(
+        runs.last().and_then(|s| s.checked),
+        Some((1, 0)),
+        "only the new file: {runs:?}"
+    );
+
+    // iCloud now holds other content under the same version.
+    d.icloud.with(|i| i.corrupt("from-linux.txt", b"broken"));
+    d.events.send(Event::SyncNow).expect("send");
+    let s = d.next_run();
+    assert_eq!(
+        (s.done, s.checked),
+        (0, Some((0, 0))),
+        "checked a week ago: not due"
+    );
+    let icloud = d.stop();
+    assert_eq!(
+        icloud.content("from-linux.txt"),
+        Some(&b"broken"[..]),
+        "nothing changed"
+    );
 }

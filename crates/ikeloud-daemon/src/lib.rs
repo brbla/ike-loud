@@ -8,8 +8,10 @@
 //!
 //! [`Daemon`] repeats runs: after local changes reported by inotify
 //! ([`spawn_watcher`]), regularly, and with growing waits after failures, as
-//! [`Schedule`] decides with the [`Timing`] of decision 0018.
+//! [`Schedule`] decides with the [`Timing`] of decision 0018. After a quiet
+//! run it checks a part of the files ([`check_part`], decision 0028).
 
+mod check;
 mod daemon;
 mod effects;
 mod icloud;
@@ -33,6 +35,7 @@ pub fn shutting_down() -> bool {
     SHUTDOWN.load(Ordering::SeqCst)
 }
 
+pub use check::{CheckLimits, CheckReport, check_part};
 pub use daemon::{Daemon, Event, Status, spawn_watcher};
 pub use icloud::{ICloudRemote, stop_reason};
 pub use remote::{Download, Listing, Remote, RemoteError, Written};

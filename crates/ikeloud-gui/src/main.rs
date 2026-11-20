@@ -175,6 +175,8 @@ struct App {
     notified: Cell<Option<State>>,
     /// Newest conflict copy already told about (journal time).
     conflicts_seen: Cell<u64>,
+    /// Newest difference found by the check run already told about.
+    differs_seen: Cell<u64>,
     _hold: gio::ApplicationHoldGuard,
 }
 
@@ -287,7 +289,8 @@ impl App {
             status_view: RefCell::new(None),
             shown: Cell::new(None),
             notified: Cell::new(None),
-            conflicts_seen: Cell::new(newest_conflict(&load_journal(&paths_journal))),
+            conflicts_seen: Cell::new(newest(&load_journal(&paths_journal), "conflict-copy")),
+            differs_seen: Cell::new(newest(&load_journal(&paths_journal), "check-differs")),
             _hold: app.hold(),
         });
 
@@ -1354,34 +1357,56 @@ impl App {
             self.notified.set(wanted);
         }
         let journal = load_journal(&self.paths.journal);
-        let newest = newest_conflict(&journal);
-        if newest > self.conflicts_seen.get() {
-            let fresh: Vec<&JournalLine> = journal
-                .iter()
-                .filter(|l| l.kind == "conflict-copy" && l.time > self.conflicts_seen.get())
-                .collect();
-            if let Some(first) = fresh.first() {
-                let n = gio::Notification::new(&self.t("gui-notify-conflict-title"));
-                n.set_body(Some(
-                    &self.message(
-                        &Message::new("gui-notify-conflict")
-                            .arg(
-                                "name",
-                                Value::Text(
-                                    first.target.clone().unwrap_or_else(|| first.path.clone()),
-                                ),
-                            )
-                            .arg(
-                                "count",
-                                Value::Number(u64::try_from(fresh.len()).unwrap_or(u64::MAX)),
-                            ),
-                    ),
-                ));
-                n.set_default_action("app.show");
-                self.app.send_notification(Some("conflict"), &n);
-            }
-            self.conflicts_seen.set(newest);
+        self.notify_new(
+            &journal,
+            "conflict-copy",
+            &self.conflicts_seen,
+            ("gui-notify-conflict-title", "gui-notify-conflict"),
+        );
+        self.notify_new(
+            &journal,
+            "check-differs",
+            &self.differs_seen,
+            ("gui-notify-differs-title", "gui-notify-differs"),
+        );
+    }
+
+    /// One notification for the journal entries of `kind` newer than
+    /// `seen` (the first one named, the others counted), then `seen` moves on.
+    fn notify_new(
+        &self,
+        journal: &[JournalLine],
+        kind: &str,
+        seen: &Cell<u64>,
+        (title, key): (&'static str, &'static str),
+    ) {
+        let latest = newest(journal, kind);
+        if latest <= seen.get() {
+            return;
         }
+        let fresh: Vec<&JournalLine> = journal
+            .iter()
+            .filter(|l| l.kind == kind && l.time > seen.get())
+            .collect();
+        if let Some(first) = fresh.first() {
+            let n = gio::Notification::new(&self.t(title));
+            n.set_body(Some(
+                &self.message(
+                    &Message::new(key)
+                        .arg(
+                            "name",
+                            Value::Text(first.target.clone().unwrap_or_else(|| first.path.clone())),
+                        )
+                        .arg(
+                            "count",
+                            Value::Number(u64::try_from(fresh.len()).unwrap_or(u64::MAX)),
+                        ),
+                ),
+            ));
+            n.set_default_action("app.show");
+            self.app.send_notification(Some(kind), &n);
+        }
+        seen.set(latest);
     }
 
     /// The latest changes the daemon carried out, newest first.
@@ -1445,6 +1470,7 @@ impl App {
             "folder-created-local" => "gui-journal-folder-created-local",
             "folder-removed-local" => "gui-journal-folder-removed-local",
             "folder-trashed-remote" => "gui-journal-folder-trashed-remote",
+            "check-differs" => "gui-journal-check-differs",
             _ => return kind.to_string(),
         };
         self.t(key)
@@ -1665,6 +1691,28 @@ impl App {
         }
     }
 
+    /// Where the check run stands (decision 0028); `None` before its first
+    /// part.
+    fn check_line(&self, status: &Status) -> Option<String> {
+        let (files, current, differing) = (
+            status.check_files,
+            status.check_current,
+            status.check_differing,
+        );
+        let message = if differing > 0 {
+            Message::new("gui-check-differs").arg("count", Value::Number(differing))
+        } else if files == 0 {
+            return None;
+        } else if current < files {
+            Message::new("gui-check-progress")
+                .arg("current", Value::Number(current))
+                .arg("files", Value::Number(files))
+        } else {
+            Message::new("gui-check-ok").arg("files", Value::Number(files))
+        };
+        Some(self.message(&message))
+    }
+
     fn describe(
         &self,
         state: Option<State>,
@@ -1693,6 +1741,10 @@ impl App {
                     detail.push_str(&self.message(
                         &Message::new("gui-local-pending").arg("count", Value::Number(pending)),
                     ));
+                }
+                if let Some(check) = status.and_then(|s| self.check_line(s)) {
+                    detail.push_str("\n\n");
+                    detail.push_str(&check);
                 }
                 (self.t("gui-state-idle"), detail)
             }
@@ -1767,11 +1819,11 @@ fn folder_from_text(text: &str) -> PathBuf {
     }
 }
 
-/// Time of the newest conflict copy in the journal (0: none).
-fn newest_conflict(journal: &[JournalLine]) -> u64 {
+/// Time of the newest journal entry of `kind` (0: none).
+fn newest(journal: &[JournalLine], kind: &str) -> u64 {
     journal
         .iter()
-        .filter(|l| l.kind == "conflict-copy")
+        .filter(|l| l.kind == kind)
         .map(|l| l.time)
         .max()
         .unwrap_or(0)
